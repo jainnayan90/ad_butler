@@ -35,3 +35,7 @@ ad_butler-*.tar
 npm-debug.log
 /assets/node_modules/
 
+scripts
+WORKFLOW.md
+.envrc
+structure.sql
