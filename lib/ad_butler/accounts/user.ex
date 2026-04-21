@@ -25,6 +25,7 @@ defmodule AdButler.Accounts.User do
     |> validate_required([:email, :meta_user_id])
     |> validate_format(:email, ~r/@/)
     |> validate_format(:meta_user_id, ~r/^[1-9]\d{0,19}$/)
+    |> unique_constraint(:meta_user_id)
     |> unique_constraint(:email)
   end
 end

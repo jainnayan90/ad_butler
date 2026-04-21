@@ -45,7 +45,7 @@ defmodule AdButler.Workers.TokenRefreshWorker do
 
     case meta_client().refresh_token(connection.access_token) do
       {:ok, %{"access_token" => token, "expires_in" => expires_in}} ->
-        # Meta returns seconds; if milliseconds, div gives 0 → clamped to 1 day
+        # Meta returns expires_in as seconds (e.g. 5_184_000 for 60 days).
         expiry = DateTime.add(DateTime.utc_now(), expires_in, :second)
 
         case Accounts.update_meta_connection(connection, %{

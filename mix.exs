@@ -73,7 +73,8 @@ defmodule AdButler.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:ex_machina, "~> 2.8", only: [:test, :dev]},
       {:plug_attack, "~> 0.4"},
-      {:credo, "~> 1.6", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.0", only: [:dev], runtime: false}
     ]
   end
 
