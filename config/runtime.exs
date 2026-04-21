@@ -44,9 +44,8 @@ config :ad_butler, AdButlerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
-  # IMPORTANT: The `secure: Mix.env() == :prod` cookie flag in endpoint.ex is evaluated
-  # at compile time. Production builds must use MIX_ENV=prod to ensure session cookies
-  # are marked secure. Builds compiled with any other MIX_ENV will send cookies over HTTP.
+  # Session cookies use `secure: true` by default (see endpoint.ex :session_secure_cookie).
+  # dev.exs and test.exs override this to false; no override is needed here for production.
   config :ad_butler, AdButlerWeb.Endpoint,
     force_ssl: [
       hsts: true,

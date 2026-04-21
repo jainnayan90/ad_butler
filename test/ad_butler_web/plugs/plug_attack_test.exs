@@ -38,6 +38,41 @@ defmodule AdButlerWeb.PlugAttackTest do
     end
   end
 
+  describe "fly-client-ip header" do
+    test "valid fly-client-ip is used as rate-limit key" do
+      ip_str = "203.0.113.#{unique_octet()}"
+
+      conn =
+        conn_with_ip({127, 0, 0, 1})
+        |> Plug.Conn.put_req_header("fly-client-ip", ip_str)
+
+      for _i <- 1..10 do
+        AdButlerWeb.PlugAttack.call(conn, [])
+      end
+
+      assert AdButlerWeb.PlugAttack.call(conn, []).halted
+    end
+
+    test "spoofed (non-IP) fly-client-ip falls back to remote_ip" do
+      {a, b, c, d} = {10, unique_octet(), 1, 1}
+      conn = conn_with_ip({a, b, c, d})
+
+      # Poison the header with a non-IP value — should be ignored,
+      # throttle bucket is keyed by remote_ip
+      conn_spoofed =
+        conn
+        |> Plug.Conn.put_req_header("fly-client-ip", "not-an-ip-address")
+
+      for _i <- 1..10 do
+        AdButlerWeb.PlugAttack.call(conn_spoofed, [])
+      end
+
+      # 11th request from the SAME remote_ip (via a different header value)
+      # is still blocked because the key fell back to remote_ip
+      assert AdButlerWeb.PlugAttack.call(conn, []).halted
+    end
+  end
+
   defp unique_octet do
     rem(System.unique_integer([:positive]), 250) + 1
   end

@@ -89,7 +89,7 @@ defmodule AdButler.Accounts do
 
   @spec list_expiring_meta_connections(pos_integer(), pos_integer()) :: [MetaConnection.t()]
   def list_expiring_meta_connections(days_ahead \\ 70, limit \\ 500) do
-    threshold = DateTime.add(DateTime.utc_now(), days_ahead, :day)
+    threshold = DateTime.add(DateTime.utc_now(), days_ahead * 86_400, :second)
 
     MetaConnection
     |> where([mc], mc.status == "active" and mc.token_expires_at < ^threshold)

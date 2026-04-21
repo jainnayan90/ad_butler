@@ -25,7 +25,7 @@ defmodule AdButler.Accounts.MetaConnection do
     meta_connection
     |> cast(attrs, [:user_id, :meta_user_id, :access_token, :token_expires_at, :scopes, :status])
     |> validate_required([:user_id, :meta_user_id, :access_token, :token_expires_at, :scopes])
-    |> validate_inclusion(:status, ["active", "expired", "revoked"])
+    |> validate_inclusion(:status, ["active", "expired", "revoked", "error"])
     |> unique_constraint([:user_id, :meta_user_id])
   end
 end

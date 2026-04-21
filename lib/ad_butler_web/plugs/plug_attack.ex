@@ -17,10 +17,20 @@ defmodule AdButlerWeb.PlugAttack do
   # Fly.io injects fly-client-ip and strips any client-supplied value, so it's
   # the authoritative real-IP source on Fly deployments. Falls back to
   # conn.remote_ip on non-Fly environments (local dev, other hosting).
+  # The value is validated as a well-formed IP address before use so that
+  # a spoofed or malformed header cannot bypass throttling or inflate ETS keys.
   defp client_ip(conn) do
     case Plug.Conn.get_req_header(conn, "fly-client-ip") do
-      [ip | _] -> ip
-      [] -> conn.remote_ip |> :inet.ntoa() |> to_string()
+      [ip_str | _] ->
+        case :inet.parse_address(to_charlist(ip_str)) do
+          {:ok, addr} -> :inet.ntoa(addr) |> to_string()
+          {:error, _} -> remote_ip(conn)
+        end
+
+      [] ->
+        remote_ip(conn)
     end
   end
+
+  defp remote_ip(conn), do: conn.remote_ip |> :inet.ntoa() |> to_string()
 end
