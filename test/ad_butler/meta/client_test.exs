@@ -1,0 +1,170 @@
+defmodule AdButler.Meta.ClientTest do
+  # async: false — :meta_rate_limits ETS table is process-global
+  use ExUnit.Case, async: false
+
+  alias AdButler.Meta.Client
+
+  @rate_limit_table :meta_rate_limits
+
+  setup do
+    orig_req_options = Application.get_env(:ad_butler, :req_options)
+    orig_app_id = Application.get_env(:ad_butler, :meta_app_id)
+    orig_app_secret = Application.get_env(:ad_butler, :meta_app_secret)
+    orig_callback_url = Application.get_env(:ad_butler, :meta_oauth_callback_url)
+
+    Application.put_env(:ad_butler, :req_options, plug: {Req.Test, AdButler.Meta.Client})
+    Application.put_env(:ad_butler, :meta_app_id, "test_app_id")
+    Application.put_env(:ad_butler, :meta_app_secret, "test_app_secret")
+
+    Application.put_env(
+      :ad_butler,
+      :meta_oauth_callback_url,
+      "http://localhost/auth/meta/callback"
+    )
+
+    on_exit(fn ->
+      restore_or_delete(:req_options, orig_req_options)
+      restore_or_delete(:meta_app_id, orig_app_id)
+      restore_or_delete(:meta_app_secret, orig_app_secret)
+      restore_or_delete(:meta_oauth_callback_url, orig_callback_url)
+    end)
+
+    :ok
+  end
+
+  defp restore_or_delete(key, nil), do: Application.delete_env(:ad_butler, key)
+  defp restore_or_delete(key, val), do: Application.put_env(:ad_butler, key, val)
+
+  describe "list_ad_accounts/1" do
+    test "returns ok with data list and writes ETS entry on rate-limit header" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        conn =
+          Plug.Conn.put_resp_header(
+            conn,
+            "x-business-use-case-usage",
+            Jason.encode!(%{
+              "act_123" => [%{"call_count" => 5, "cpu_time" => 10, "total_time" => 20}]
+            })
+          )
+
+        Req.Test.json(conn, %{"data" => [%{"id" => "act_123", "name" => "Test Account"}]})
+      end)
+
+      assert {:ok, [%{"id" => "act_123"}]} = Client.list_ad_accounts("token_abc")
+    end
+  end
+
+  describe "get_rate_limit_usage/1" do
+    test "returns 0.0 when no ETS entry exists" do
+      assert Client.get_rate_limit_usage("act_nonexistent") == 0.0
+    end
+
+    test "returns float after ETS is populated" do
+      on_exit(fn -> :ets.delete(@rate_limit_table, "act_999") end)
+      :ets.insert(@rate_limit_table, {"act_999", {50, 10, 20, DateTime.utc_now()}})
+      assert Client.get_rate_limit_usage("act_999") == 0.5
+    end
+  end
+
+  describe "batch_request/2" do
+    test "POSTs requests as JSON and returns decoded list" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, [%{"body" => "{\"data\":[]}"}])
+      end)
+
+      requests = [%{"method" => "GET", "relative_url" => "/me"}]
+      assert {:ok, [_]} = Client.batch_request("token_abc", requests)
+    end
+  end
+
+  describe "exchange_code/1" do
+    test "happy path: 200 with access_token returns {:ok, %{access_token, expires_in}}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"access_token" => "my_token", "expires_in" => 3600})
+      end)
+
+      assert {:ok, %{access_token: "my_token", expires_in: 3600}} =
+               Client.exchange_code("code123")
+    end
+
+    test "happy path: missing expires_in falls back to default TTL" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"access_token" => "my_token"})
+      end)
+
+      assert {:ok, %{access_token: "my_token", expires_in: expires_in}} =
+               Client.exchange_code("code123")
+
+      assert expires_in == 60 * 24 * 60 * 60
+    end
+
+    test "error path: non-200 returns {:error, {:token_exchange_failed, body}}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{"error" => %{"message" => "Invalid code"}})
+      end)
+
+      assert {:error, {:token_exchange_failed, _body}} =
+               Client.exchange_code("bad_code")
+    end
+  end
+
+  describe "get_me/1" do
+    test "happy path: returns id, name, email" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"id" => "111111", "name" => "Alice", "email" => "alice@example.com"})
+      end)
+
+      assert {:ok, %{name: "Alice", email: "alice@example.com", meta_user_id: "111111"}} =
+               Client.get_me("token")
+    end
+
+    test "error path: non-200 returns {:error, {:user_info_failed, body}}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        conn
+        |> Plug.Conn.put_status(401)
+        |> Req.Test.json(%{"error" => %{"message" => "Invalid token"}})
+      end)
+
+      assert {:error, {:user_info_failed, _body}} = Client.get_me("bad_token")
+    end
+
+    test "missing email field: returns nil for email" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"id" => "222222", "name" => "Bob"})
+      end)
+
+      assert {:ok, %{email: nil}} = Client.get_me("token")
+    end
+  end
+
+  describe "error handling" do
+    test "401 returns {:error, :unauthorized}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(
+          %{conn | status: 401},
+          %{"error" => %{"message" => "Invalid OAuth access token."}}
+        )
+      end)
+
+      assert {:error, :unauthorized} = Client.list_ad_accounts("bad_token")
+    end
+
+    test "429 returns {:error, :rate_limit_exceeded}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 429}, %{"error" => %{"message" => "Rate limit hit"}})
+      end)
+
+      assert {:error, :rate_limit_exceeded} = Client.list_ad_accounts("token")
+    end
+
+    test "500 returns {:error, :meta_server_error}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 500}, %{"error" => %{"message" => "Server error"}})
+      end)
+
+      assert {:error, :meta_server_error} = Client.list_ad_accounts("token")
+    end
+  end
+end

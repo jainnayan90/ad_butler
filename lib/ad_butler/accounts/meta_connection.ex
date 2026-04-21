@@ -1,0 +1,28 @@
+defmodule AdButler.Accounts.MetaConnection do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+
+  schema "meta_connections" do
+    field :meta_user_id, :string
+    field :access_token, AdButler.Encrypted.Binary, redact: true
+    field :token_expires_at, :utc_datetime_usec
+    field :scopes, {:array, :string}
+    field :status, :string, default: "active"
+
+    belongs_to :user, AdButler.Accounts.User
+
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(meta_connection, attrs) do
+    meta_connection
+    |> cast(attrs, [:user_id, :meta_user_id, :access_token, :token_expires_at, :scopes, :status])
+    |> validate_required([:user_id, :meta_user_id, :access_token, :token_expires_at, :scopes])
+    |> validate_inclusion(:status, ["active", "expired", "revoked"])
+    |> unique_constraint([:user_id, :meta_user_id])
+  end
+end

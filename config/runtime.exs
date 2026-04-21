@@ -16,6 +16,26 @@ import Config
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
+if config_env() == :prod do
+  cloak_key = Base.decode64!(System.fetch_env!("CLOAK_KEY"))
+
+  if byte_size(cloak_key) != 32 do
+    raise "CLOAK_KEY must be exactly 32 bytes after base64 decoding, got #{byte_size(cloak_key)}"
+  end
+
+  config :ad_butler, AdButler.Vault,
+    ciphers: [
+      default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: cloak_key}
+    ]
+end
+
+if config_env() == :prod do
+  config :ad_butler,
+    meta_app_id: System.fetch_env!("META_APP_ID"),
+    meta_app_secret: System.fetch_env!("META_APP_SECRET"),
+    meta_oauth_callback_url: System.fetch_env!("META_OAUTH_CALLBACK_URL")
+end
+
 if System.get_env("PHX_SERVER") do
   config :ad_butler, AdButlerWeb.Endpoint, server: true
 end
@@ -24,6 +44,16 @@ config :ad_butler, AdButlerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
+  # IMPORTANT: The `secure: Mix.env() == :prod` cookie flag in endpoint.ex is evaluated
+  # at compile time. Production builds must use MIX_ENV=prod to ensure session cookies
+  # are marked secure. Builds compiled with any other MIX_ENV will send cookies over HTTP.
+  config :ad_butler, AdButlerWeb.Endpoint,
+    force_ssl: [
+      hsts: true,
+      rewrite_on: [:x_forwarded_proto],
+      exclude: ["localhost", "127.0.0.1"]
+    ]
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """
@@ -34,7 +64,8 @@ if config_env() == :prod do
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
   config :ad_butler, AdButler.Repo,
-    # ssl: true,
+    ssl: true,
+    ssl_opts: [verify: :verify_peer, cacerts: :public_key.cacerts_get()],
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
@@ -53,7 +84,9 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    System.get_env("PHX_HOST") ||
+      raise "environment variable PHX_HOST is missing."
 
   config :ad_butler, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

@@ -12,6 +12,10 @@ config :ad_butler,
   generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint
+config :ad_butler,
+  session_signing_salt: "yp0B0EBm",
+  session_encryption_salt: "Cfg1C1OwCrAmNkVp"
+
 config :ad_butler, AdButlerWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -20,7 +24,7 @@ config :ad_butler, AdButlerWeb.Endpoint,
     layout: false
   ],
   pubsub_server: AdButler.PubSub,
-  live_view: [signing_salt: "oHp6OLvz"]
+  live_view: [signing_salt: "27ZZYgxL"]
 
 # Configure the mailer
 #
@@ -60,6 +64,27 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+config :phoenix, :filter_parameters, [
+  "password",
+  "access_token",
+  "client_secret",
+  "code",
+  "fb_exchange_token",
+  "token"
+]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+config :ad_butler, Oban,
+  repo: AdButler.Repo,
+  queues: [default: 10, sync: 20, analytics: 5],
+  plugins: [
+    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 */6 * * *", AdButler.Workers.TokenRefreshSweepWorker}
+     ]}
+  ]
+
 import_config "#{config_env()}.exs"

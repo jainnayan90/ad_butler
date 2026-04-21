@@ -7,16 +7,6 @@ import Config
 # before starting your production server.
 config :ad_butler, AdButlerWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
-# Force using SSL in production. This also sets the "strict-security-transport" header,
-# known as HSTS. If you have a health check endpoint, you may want to exclude it below.
-# Note `:force_ssl` is required to be set at compile-time.
-config :ad_butler, AdButlerWeb.Endpoint,
-  force_ssl: [rewrite_on: [:x_forwarded_proto]],
-  exclude: [
-    # paths: ["/health"],
-    hosts: ["localhost", "127.0.0.1"]
-  ]
-
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 
@@ -25,6 +15,14 @@ config :swoosh, local: false
 
 # Do not print debug messages in production
 config :logger, level: :info
+
+# Session and LiveView salts — rotate these when compromised (clears active sessions).
+# The values below were generated with `mix phx.gen.secret` and are unique to production.
+config :ad_butler,
+  session_signing_salt: "dCPITWsx",
+  session_encryption_salt: "p6is6RY14gxjc17W"
+
+config :ad_butler, AdButlerWeb.Endpoint, live_view: [signing_salt: "RdNeLY9O"]
 
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

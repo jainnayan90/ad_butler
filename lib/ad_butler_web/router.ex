@@ -7,17 +7,43 @@ defmodule AdButlerWeb.Router do
     plug :fetch_live_flash
     plug :put_root_layout, html: {AdButlerWeb.Layouts, :root}
     plug :protect_from_forgery
-    plug :put_secure_browser_headers
+
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" =>
+        "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"
+    }
   end
 
   pipeline :api do
     plug :accepts, ["json"]
   end
 
+  pipeline :authenticated do
+    plug AdButlerWeb.Plugs.RequireAuthenticated
+  end
+
   scope "/", AdButlerWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+  end
+
+  scope "/", AdButlerWeb do
+    pipe_through [:browser, :authenticated]
+
+    get "/dashboard", PageController, :dashboard
+  end
+
+  pipeline :rate_limited do
+    plug AdButlerWeb.PlugAttack
+  end
+
+  scope "/auth", AdButlerWeb do
+    pipe_through [:browser, :rate_limited]
+
+    get "/meta", AuthController, :request
+    get "/meta/callback", AuthController, :callback
+    delete "/logout", AuthController, :logout
   end
 
   # Other scopes may use custom stacks.

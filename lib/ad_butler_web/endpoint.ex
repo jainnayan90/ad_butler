@@ -7,8 +7,11 @@ defmodule AdButlerWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_ad_butler_key",
-    signing_salt: "rfEmV5o0",
-    same_site: "Lax"
+    signing_salt: Application.compile_env!(:ad_butler, :session_signing_salt),
+    encryption_salt: Application.compile_env!(:ad_butler, :session_encryption_salt),
+    same_site: "Lax",
+    http_only: true,
+    secure: Application.compile_env(:ad_butler, :session_secure_cookie, true)
   ]
 
   socket "/live", Phoenix.LiveView.Socket,

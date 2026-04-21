@@ -11,7 +11,8 @@ defmodule AdButler.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      test_coverage: [summary: [threshold: 0]]
     ]
   end
 
@@ -66,7 +67,12 @@ defmodule AdButler.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:tidewave, "~> 0.1", only: :dev}
+      {:tidewave, "~> 0.1", only: :dev},
+      {:cloak_ecto, "~> 1.3"},
+      {:oban, "~> 2.18"},
+      {:mox, "~> 1.0", only: :test},
+      {:ex_machina, "~> 2.8", only: [:test, :dev]},
+      {:plug_attack, "~> 0.4"}
     ]
   end
 

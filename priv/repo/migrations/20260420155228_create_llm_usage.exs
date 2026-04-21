@@ -44,7 +44,8 @@ defmodule AdButler.Repo.Migrations.CreateLlmUsage do
            )
 
     create constraint(:llm_usage, :purpose_values,
-         check: "purpose IN ('chat_response','embedding','finding_summary','tool_arg_classification')"
-       )
+             check:
+               "purpose IN ('chat_response','embedding','finding_summary','tool_arg_classification')"
+           )
   end
 end
