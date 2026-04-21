@@ -13,9 +13,9 @@ defmodule AdButler.Repo.Migrations.CreateLlmUsage do
       add :input_tokens, :integer, null: false, default: 0
       add :output_tokens, :integer, null: false, default: 0
       add :cached_tokens, :integer, null: false, default: 0
-      add :cost_cents_input, :integer, null: false, default: 0
-      add :cost_cents_output, :integer, null: false, default: 0
-      add :cost_cents_total, :integer, null: false, default: 0
+      add :cost_cents_input, :bigint, null: false, default: 0
+      add :cost_cents_output, :bigint, null: false, default: 0
+      add :cost_cents_total, :bigint, null: false, default: 0
       add :latency_ms, :integer
       add :status, :string, null: false
       add :request_id, :string
@@ -42,5 +42,9 @@ defmodule AdButler.Repo.Migrations.CreateLlmUsage do
     create constraint(:llm_usage, :provider_values,
              check: "provider IN ('anthropic','openai','google')"
            )
+
+    create constraint(:llm_usage, :purpose_values,
+         check: "purpose IN ('chat_response','embedding','finding_summary','tool_arg_classification')"
+       )
   end
 end

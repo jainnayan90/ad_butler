@@ -14,6 +14,6 @@ defmodule AdButler.Repo.Migrations.CreateUsers do
     end
 
     create unique_index(:users, [:email])
-    create index(:users, [:meta_user_id])
+    create unique_index(:users, [:meta_user_id])
   end
 end

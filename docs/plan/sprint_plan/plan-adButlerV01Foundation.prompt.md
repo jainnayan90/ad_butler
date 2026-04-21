@@ -8,7 +8,7 @@
 
 ## Development Discipline (CODING_PRINCIPLES.md)
 
-**All work follows [CODING_PRINCIPLES.md](docs:///CODING_PRINCIPLES.md).** Key principles enforced throughout:
+**All work follows [CODING_PRINCIPLES.md](/CODING_PRINCIPLES.md).** Key principles enforced throughout:
 
 ### TDD Workflow (Red → Green → Refactor)
 1. **Write test first** — Test defines success, watch it fail (red)
@@ -1799,7 +1799,7 @@ defmodule AdButler.Sync.MetadataPipeline do
     end
   end
   
-  defprabbitmq_url, do: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]
+  defp rabbitmq_url, do: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]
 end
 
 # lib/ad_butler/application.ex (add to supervision tree)
