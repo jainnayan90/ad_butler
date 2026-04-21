@@ -64,7 +64,8 @@ defmodule AdButlerWeb.Endpoint do
   # Reads session salts from Application env at call time rather than a frozen module
   # attribute. This allows salt updates to take effect without a full restart in
   # scenarios where the Application env is updated externally (e.g., hot config reload).
-  # fetch_env! raises at startup if the key is missing, catching misconfiguration early.
+  # fetch_env! raises on the first request if a key is missing; misconfiguration
+  # surfaces immediately on the first HTTP hit rather than silently using defaults.
   defp session(conn, _opts) do
     opts =
       Plug.Session.init(

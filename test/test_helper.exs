@@ -3,21 +3,18 @@ Ecto.Adapters.SQL.Sandbox.mode(AdButler.Repo, :manual)
 # Checkout/checkin explicitly so this diagnostic query does not leak a
 # connection into the long-lived test runner process (auto mode would keep
 # it checked out for the whole suite, reducing the available pool by 1).
+# DB connection failures are not caught — they raise so CI fails loudly
+# rather than silently skipping :requires_citext tests on an unhealthy DB.
+:ok = Ecto.Adapters.SQL.Sandbox.checkout(AdButler.Repo)
+
 citext_ok =
-  try do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(AdButler.Repo)
-
-    result =
-      case AdButler.Repo.query("SELECT 1 FROM pg_extension WHERE extname = 'citext'") do
-        {:ok, %{rows: [[1]]}} -> true
-        _ -> false
-      end
-
-    Ecto.Adapters.SQL.Sandbox.checkin(AdButler.Repo)
-    result
-  rescue
-    _ -> false
+  case AdButler.Repo.query("SELECT 1 FROM pg_extension WHERE extname = 'citext'") do
+    {:ok, %{rows: [[1]]}} -> true
+    {:ok, _} -> false
+    {:error, reason} -> raise "citext probe failed — DB may be unhealthy: #{inspect(reason)}"
   end
+
+Ecto.Adapters.SQL.Sandbox.checkin(AdButler.Repo)
 
 excludes = if citext_ok, do: [], else: [:requires_citext]
 ExUnit.start(exclude: excludes)

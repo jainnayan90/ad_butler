@@ -14,15 +14,15 @@ defmodule AdButlerWeb.Plugs.RequireAuthenticated do
         |> halt()
 
       user_id ->
-        case AdButler.Accounts.get_user(user_id) do
-          nil ->
+        with {:ok, valid_id} <- Ecto.UUID.cast(user_id),
+             user when not is_nil(user) <- AdButler.Accounts.get_user(valid_id) do
+          assign(conn, :current_user, user)
+        else
+          _ ->
             conn
             |> configure_session(drop: true)
             |> redirect(to: "/")
             |> halt()
-
-          user ->
-            assign(conn, :current_user, user)
         end
     end
   end

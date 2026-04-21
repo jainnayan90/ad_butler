@@ -55,6 +55,7 @@ defmodule AdButlerWeb.AuthController do
         Logger.error("OAuth failure", reason: ErrorHelpers.safe_reason(reason))
 
         conn
+        |> delete_session(:oauth_state)
         |> put_flash(:error, "Authentication failed. Please try again.")
         |> redirect(to: ~p"/")
     end
