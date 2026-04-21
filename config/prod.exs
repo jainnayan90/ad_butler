@@ -16,13 +16,5 @@ config :swoosh, local: false
 # Do not print debug messages in production
 config :logger, level: :info
 
-# Session and LiveView salts — rotate these when compromised (clears active sessions).
-# The values below were generated with `mix phx.gen.secret` and are unique to production.
-config :ad_butler,
-  session_signing_salt: "dCPITWsx",
-  session_encryption_salt: "p6is6RY14gxjc17W"
-
-config :ad_butler, AdButlerWeb.Endpoint, live_view: [signing_salt: "RdNeLY9O"]
-
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

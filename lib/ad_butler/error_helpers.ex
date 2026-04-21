@@ -1,4 +1,5 @@
 defmodule AdButler.ErrorHelpers do
+  @moduledoc false
   @doc """
   Sanitizes error terms for safe logging — returns only the tag atom, never
   raw structs or binaries that may embed secrets (e.g. Mint transport errors

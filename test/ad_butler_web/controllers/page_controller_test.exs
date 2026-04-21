@@ -1,5 +1,5 @@
 defmodule AdButlerWeb.PageControllerTest do
-  use AdButlerWeb.ConnCase
+  use AdButlerWeb.ConnCase, async: true
 
   test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")

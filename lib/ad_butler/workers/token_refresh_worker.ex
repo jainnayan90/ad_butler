@@ -1,4 +1,5 @@
 defmodule AdButler.Workers.TokenRefreshWorker do
+  @moduledoc false
   use Oban.Worker,
     queue: :default,
     max_attempts: 5,
@@ -12,7 +13,9 @@ defmodule AdButler.Workers.TokenRefreshWorker do
   @max_refresh_days 60
 
   alias AdButler.Accounts
+  alias AdButler.Accounts.MetaConnection
   alias AdButler.ErrorHelpers
+  alias AdButler.Meta.Client
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"meta_connection_id" => id}}) do
@@ -28,14 +31,15 @@ defmodule AdButler.Workers.TokenRefreshWorker do
   @impl Oban.Worker
   def timeout(_job), do: :timer.seconds(60)
 
-  @spec schedule_refresh(%AdButler.Accounts.MetaConnection{}, pos_integer()) ::
+  @spec schedule_refresh(MetaConnection.t(), pos_integer()) ::
           {:ok, Oban.Job.t()} | {:error, term()}
-  def schedule_refresh(%AdButler.Accounts.MetaConnection{} = conn, days) do
+  def schedule_refresh(%MetaConnection{} = conn, days) do
     %{"meta_connection_id" => conn.id}
     |> new(schedule_in: {days, :days})
     |> Oban.insert()
   end
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp do_refresh(connection) do
     id = connection.id
 
@@ -52,6 +56,7 @@ defmodule AdButler.Workers.TokenRefreshWorker do
             schedule_result = schedule_next_refresh(connection, expires_in)
             Logger.info("Token refresh success", meta_connection_id: id)
 
+            # credo:disable-for-next-line Credo.Check.Refactor.Nesting
             case schedule_result do
               :ok ->
                 :ok
@@ -65,10 +70,18 @@ defmodule AdButler.Workers.TokenRefreshWorker do
                 :ok
             end
 
-          {:error, reason} ->
+          {:error, %Ecto.Changeset{} = changeset} ->
             Logger.error("Token refresh update failed",
               meta_connection_id: id,
-              reason: reason
+              reason: inspect(changeset.errors)
+            )
+
+            {:error, :update_failed}
+
+          {:error, reason} ->
+            Logger.error("Token refresh update failed (unexpected)",
+              meta_connection_id: id,
+              reason: inspect(reason)
             )
 
             {:error, :update_failed}
@@ -132,7 +145,5 @@ defmodule AdButler.Workers.TokenRefreshWorker do
     end
   end
 
-  defp meta_client do
-    Application.get_env(:ad_butler, :meta_client, AdButler.Meta.Client)
-  end
+  defp meta_client, do: Client.client()
 end

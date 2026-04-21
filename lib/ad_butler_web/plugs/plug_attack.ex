@@ -1,4 +1,5 @@
 defmodule AdButlerWeb.PlugAttack do
+  @moduledoc false
   use PlugAttack
 
   # 10 requests per 60 seconds per (client IP, route) on OAuth routes.
@@ -13,23 +14,13 @@ defmodule AdButlerWeb.PlugAttack do
     )
   end
 
+  # Fly.io injects fly-client-ip and strips any client-supplied value, so it's
+  # the authoritative real-IP source on Fly deployments. Falls back to
+  # conn.remote_ip on non-Fly environments (local dev, other hosting).
   defp client_ip(conn) do
     case Plug.Conn.get_req_header(conn, "fly-client-ip") do
       [ip | _] -> ip
-      [] -> xff_ip(conn)
-    end
-  end
-
-  # NOTE: XFF leftmost-entry trust is only safe on Fly.io, where fly-client-ip
-  # is preferred above and Fly strips client-supplied XFF values on ingress.
-  # On other platforms, leftmost XFF is attacker-controlled — gate behind a flag.
-  defp xff_ip(conn) do
-    case Plug.Conn.get_req_header(conn, "x-forwarded-for") do
-      [forwarded | _] ->
-        forwarded |> String.split(",") |> Enum.map(&String.trim/1) |> List.first()
-
-      [] ->
-        conn.remote_ip |> :inet.ntoa() |> to_string()
+      [] -> conn.remote_ip |> :inet.ntoa() |> to_string()
     end
   end
 end

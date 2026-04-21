@@ -37,6 +37,8 @@ defmodule AdButler.Meta.ClientTest do
 
   describe "list_ad_accounts/1" do
     test "returns ok with data list and writes ETS entry on rate-limit header" do
+      on_exit(fn -> :ets.delete(:meta_rate_limits, "act_123") end)
+
       Req.Test.stub(AdButler.Meta.Client, fn conn ->
         conn =
           Plug.Conn.put_resp_header(

@@ -1,35 +1,11 @@
 defmodule AdButlerWeb.AuthControllerTest do
   use AdButlerWeb.ConnCase, async: false
 
-  setup do
-    orig_app_id = Application.get_env(:ad_butler, :meta_app_id)
-    orig_app_secret = Application.get_env(:ad_butler, :meta_app_secret)
-    orig_callback_url = Application.get_env(:ad_butler, :meta_oauth_callback_url)
-    orig_req_options = Application.get_env(:ad_butler, :req_options)
+  import Mox
 
-    Application.put_env(:ad_butler, :meta_app_id, "test_app_id")
-    Application.put_env(:ad_butler, :meta_app_secret, "test_app_secret")
+  alias AdButler.Meta.ClientMock
 
-    Application.put_env(
-      :ad_butler,
-      :meta_oauth_callback_url,
-      "http://localhost/auth/meta/callback"
-    )
-
-    Application.put_env(:ad_butler, :req_options, plug: {Req.Test, AdButler.Meta.Client})
-
-    on_exit(fn ->
-      restore_or_delete(:meta_app_id, orig_app_id)
-      restore_or_delete(:meta_app_secret, orig_app_secret)
-      restore_or_delete(:meta_oauth_callback_url, orig_callback_url)
-      restore_or_delete(:req_options, orig_req_options)
-    end)
-
-    :ok
-  end
-
-  defp restore_or_delete(key, nil), do: Application.delete_env(:ad_butler, key)
-  defp restore_or_delete(key, val), do: Application.put_env(:ad_butler, key, val)
+  setup :verify_on_exit!
 
   describe "GET /auth/meta" do
     test "redirects to Facebook OAuth and sets session state", %{conn: conn} do
@@ -49,16 +25,12 @@ defmodule AdButlerWeb.AuthControllerTest do
         |> Plug.Test.init_test_session(%{})
         |> put_session(:oauth_state, {state, System.system_time(:second)})
 
-      Req.Test.stub(AdButler.Meta.Client, fn conn ->
-        if String.contains?(conn.request_path, "oauth/access_token") do
-          Req.Test.json(conn, %{"access_token" => "fake_access_token", "expires_in" => 86400})
-        else
-          Req.Test.json(conn, %{
-            "id" => "123456789",
-            "name" => "Test User",
-            "email" => "testuser@example.com"
-          })
-        end
+      expect(ClientMock, :exchange_code, fn _code ->
+        {:ok, %{access_token: "fake_access_token", expires_in: 86_400}}
+      end)
+
+      expect(ClientMock, :get_me, fn _token ->
+        {:ok, %{meta_user_id: "123456789", name: "Test User", email: "testuser@example.com"}}
       end)
 
       conn =
@@ -79,10 +51,8 @@ defmodule AdButlerWeb.AuthControllerTest do
         |> Plug.Test.init_test_session(%{})
         |> put_session(:oauth_state, {state, System.system_time(:second)})
 
-      Req.Test.stub(AdButler.Meta.Client, fn conn ->
-        conn
-        |> Plug.Conn.put_status(400)
-        |> Req.Test.json(%{"error" => %{"message" => "Invalid code"}})
+      stub(ClientMock, :exchange_code, fn _code ->
+        {:error, {:token_exchange_failed, "Invalid code"}}
       end)
 
       conn =
@@ -106,19 +76,12 @@ defmodule AdButlerWeb.AuthControllerTest do
         |> Plug.Test.init_test_session(%{})
         |> put_session(:oauth_state, {state, System.system_time(:second)})
 
-      Req.Test.stub(AdButler.Meta.Client, fn req_conn ->
-        if String.contains?(req_conn.request_path, "oauth/access_token") do
-          Req.Test.json(req_conn, %{
-            "access_token" => "fake_access_token_2",
-            "expires_in" => 86400
-          })
-        else
-          Req.Test.json(req_conn, %{
-            "id" => "123456789",
-            "name" => "Test User",
-            "email" => "testuser@example.com"
-          })
-        end
+      expect(ClientMock, :exchange_code, fn _code ->
+        {:ok, %{access_token: "fake_access_token_2", expires_in: 86_400}}
+      end)
+
+      expect(ClientMock, :get_me, fn _token ->
+        {:ok, %{meta_user_id: "123456789", name: "Test User", email: "testuser@example.com"}}
       end)
 
       conn =

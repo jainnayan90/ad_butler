@@ -1,4 +1,5 @@
 defmodule AdButler.Meta.ClientBehaviour do
+  @moduledoc false
   @callback list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   @callback list_campaigns(String.t(), String.t(), keyword()) ::
               {:ok, list(map())} | {:error, term()}

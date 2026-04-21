@@ -44,11 +44,11 @@ defmodule AdButler.MixProject do
       {:phoenix, "~> 1.8.3"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
-      {:postgrex, ">= 0.0.0"},
+      {:postgrex, "~> 0.22"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.1.0"},
-      {:lazy_html, ">= 0.1.0", only: :test},
+      {:phoenix_live_view, "~> 1.1"},
+      {:lazy_html, "~> 0.1", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
@@ -72,7 +72,8 @@ defmodule AdButler.MixProject do
       {:oban, "~> 2.18"},
       {:mox, "~> 1.0", only: :test},
       {:ex_machina, "~> 2.8", only: [:test, :dev]},
-      {:plug_attack, "~> 0.4"}
+      {:plug_attack, "~> 0.4"},
+      {:credo, "~> 1.6", only: [:dev, :test], runtime: false}
     ]
   end
 

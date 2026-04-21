@@ -110,6 +110,61 @@ defmodule AdButler.AccountsTest do
     end
   end
 
+  describe "get_user/1" do
+    test "returns user for known id" do
+      user = insert(:user)
+      assert %Accounts.User{id: id} = Accounts.get_user(user.id)
+      assert id == user.id
+    end
+
+    test "returns nil for unknown id" do
+      assert nil == Accounts.get_user(Ecto.UUID.generate())
+    end
+  end
+
+  describe "get_user!/1" do
+    test "returns user for known id" do
+      user = insert(:user)
+      assert %Accounts.User{id: id} = Accounts.get_user!(user.id)
+      assert id == user.id
+    end
+
+    test "raises Ecto.NoResultsError for unknown id" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Accounts.get_user!(Ecto.UUID.generate())
+      end
+    end
+  end
+
+  describe "get_user_by_email/1" do
+    test "returns user for known email" do
+      user = insert(:user)
+      assert %Accounts.User{id: id} = Accounts.get_user_by_email(user.email)
+      assert id == user.id
+    end
+
+    test "returns nil for unknown email" do
+      assert nil == Accounts.get_user_by_email("nobody@example.com")
+    end
+
+    # citext gives case-insensitive lookups at the DB level. If this test fails
+    # with nil, the test DB has a stale varchar column — rebuild it:
+    #   MIX_ENV=test mix ecto.drop && mix ecto.create && mix ecto.migrate
+    @tag :requires_citext
+    test "lookup is case-insensitive (citext column)" do
+      n = System.unique_integer([:positive])
+      user = insert(:user, email: "case_#{n}@example.com")
+      upcased = String.upcase(user.email)
+      result = Accounts.get_user_by_email(upcased)
+
+      assert result != nil,
+             "citext column should return a match for uppercase input — " <>
+               "if nil, rebuild the test DB (column may be varchar from a stale schema)"
+
+      assert result.id == user.id
+    end
+  end
+
   describe "get_meta_connection/1" do
     test "returns nil for unknown id" do
       assert nil == Accounts.get_meta_connection("00000000-0000-0000-0000-000000000000")

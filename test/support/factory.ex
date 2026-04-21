@@ -1,4 +1,5 @@
 defmodule AdButler.Factory do
+  @moduledoc false
   use ExMachina.Ecto, repo: AdButler.Repo
 
   alias AdButler.Accounts.{MetaConnection, User}

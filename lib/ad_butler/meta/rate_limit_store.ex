@@ -1,4 +1,5 @@
 defmodule AdButler.Meta.RateLimitStore do
+  @moduledoc false
   use GenServer
 
   # ETS table entries are never pruned; add a periodic cleanup if cardinality grows unbounded.

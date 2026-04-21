@@ -1,4 +1,5 @@
 defmodule AdButler.Meta.Client do
+  @moduledoc false
   @behaviour AdButler.Meta.ClientBehaviour
 
   require Logger
@@ -215,6 +216,7 @@ defmodule AdButler.Meta.Client do
   defp handle_error(%{status: status}) when status >= 500, do: :meta_server_error
   defp handle_error(_), do: :unknown_error
 
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp parse_rate_limit_header(%{headers: headers}, ad_account_id)
        when is_binary(ad_account_id) do
     raw =
@@ -255,4 +257,7 @@ defmodule AdButler.Meta.Client do
   end
 
   defp parse_rate_limit_header(_, _), do: :ok
+
+  @doc "Returns the configured Meta API client module (injectable for testing)."
+  def client, do: Application.get_env(:ad_butler, :meta_client, __MODULE__)
 end

@@ -1,9 +1,10 @@
 defmodule AdButlerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :ad_butler
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # @session_options is used for the LiveView socket connect_info macro (compile-time).
+  # HTTP sessions use the session/2 function plug below, which reads Application env at
+  # request time. To rotate salts without a full restart: update config.exs, runtime.exs,
+  # and the env vars simultaneously (rotation invalidates all active sessions).
   @session_options [
     store: :cookie,
     key: "_ad_butler_key",
@@ -57,6 +58,25 @@ defmodule AdButlerWeb.Endpoint do
 
   plug Plug.MethodOverride
   plug Plug.Head
-  plug Plug.Session, @session_options
+  plug :session
   plug AdButlerWeb.Router
+
+  # Reads session salts from Application env at call time rather than a frozen module
+  # attribute. This allows salt updates to take effect without a full restart in
+  # scenarios where the Application env is updated externally (e.g., hot config reload).
+  # fetch_env! raises at startup if the key is missing, catching misconfiguration early.
+  defp session(conn, _opts) do
+    opts =
+      Plug.Session.init(
+        store: :cookie,
+        key: "_ad_butler_key",
+        signing_salt: Application.fetch_env!(:ad_butler, :session_signing_salt),
+        encryption_salt: Application.fetch_env!(:ad_butler, :session_encryption_salt),
+        same_site: "Lax",
+        http_only: true,
+        secure: Application.get_env(:ad_butler, :session_secure_cookie, true)
+      )
+
+    Plug.Session.call(conn, opts)
+  end
 end
