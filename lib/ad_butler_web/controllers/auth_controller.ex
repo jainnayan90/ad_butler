@@ -76,7 +76,7 @@ defmodule AdButlerWeb.AuthController do
             {:error, :invalid_state, delete_session(conn, :oauth_state)}
 
           true ->
-            {:ok, conn}
+            {:ok, delete_session(conn, :oauth_state)}
         end
 
       _ ->
