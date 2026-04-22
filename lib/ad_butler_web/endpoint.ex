@@ -1,11 +1,12 @@
 defmodule AdButlerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :ad_butler
 
-  # @session_options is baked in at compile time and used only for the LiveView socket
-  # connect_info macro. Rotating salts here requires a full recompile and restart.
-  # HTTP sessions use the session/2 function plug below, which reads Application env at
-  # request time and can pick up salt changes without recompiling (restart only).
-  # Either way, rotation invalidates all active sessions.
+  # @session_options is frozen at compile time (compile_env!) and used only for the
+  # LiveView socket connect_info macro. Salt values set in runtime.exs are NOT picked
+  # up here without a full recompile. Rotating these salts requires recompile + restart.
+  # HTTP sessions use the session/2 function plug below, which reads Application env on
+  # every request via fetch_env!, so runtime env updates (e.g. hot config reload) take
+  # effect immediately — no restart needed. Either way, rotation invalidates all sessions.
   @session_options [
     store: :cookie,
     key: "_ad_butler_key",
@@ -62,11 +63,10 @@ defmodule AdButlerWeb.Endpoint do
   plug :session
   plug AdButlerWeb.Router
 
-  # Reads session salts from Application env at call time rather than a frozen module
-  # attribute. This allows salt updates to take effect without a full restart in
-  # scenarios where the Application env is updated externally (e.g., hot config reload).
-  # fetch_env! raises on the first request if a key is missing; misconfiguration
-  # surfaces immediately on the first HTTP hit rather than silently using defaults.
+  # Reads session salts from Application env on every request (fetch_env!), so salt
+  # updates applied at runtime (e.g. via hot config reload) take effect immediately
+  # without a restart. fetch_env! raises on the first request if a key is missing,
+  # surfacing misconfiguration immediately rather than silently using defaults.
   defp session(conn, _opts) do
     opts =
       Plug.Session.init(
