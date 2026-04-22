@@ -16,7 +16,7 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) ::
-          :ok | {:snooze, {pos_integer(), atom()}} | {:cancel, binary()} | {:error, term()}
+          :ok | {:snooze, Oban.Period.t()} | {:cancel, binary()} | {:error, term()}
   def perform(%Oban.Job{args: %{"meta_connection_id" => id}}) do
     with {:ok, uuid} <- Ecto.UUID.cast(id),
          %MetaConnection{} = conn <- Accounts.get_meta_connection(uuid) do
