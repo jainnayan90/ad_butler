@@ -10,12 +10,22 @@ defmodule AdButler.Messaging.RabbitMQTopology do
 
   @spec setup() :: :ok | {:error, term()}
   def setup do
-    with {:ok, conn} <- AMQP.Connection.open(rabbitmq_url()),
-         {:ok, channel} <- AMQP.Channel.open(conn) do
-      result = declare_topology(channel)
-      AMQP.Channel.close(channel)
-      AMQP.Connection.close(conn)
-      result
+    case AMQP.Connection.open(rabbitmq_url()) do
+      {:ok, conn} ->
+        case AMQP.Channel.open(conn) do
+          {:ok, channel} ->
+            result = declare_topology(channel)
+            AMQP.Channel.close(channel)
+            AMQP.Connection.close(conn)
+            result
+
+          {:error, _} = err ->
+            AMQP.Connection.close(conn)
+            err
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 

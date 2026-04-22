@@ -84,22 +84,22 @@ defmodule AdButler.Accounts do
   # Safety cap — for >1000 connections, replace with cursor-based batching.
   @spec list_all_active_meta_connections(pos_integer()) :: [MetaConnection.t()]
   def list_all_active_meta_connections(limit \\ 1000) do
-    result =
+    rows =
       MetaConnection
       |> where([mc], mc.status == "active")
-      |> limit(^limit)
+      |> limit(^(limit + 1))
       |> Repo.all()
 
-    result_count = length(result)
-
-    if result_count >= limit do
+    if length(rows) > limit do
       Logger.error("list_all_active_meta_connections hit row limit — results truncated",
-        count: result_count,
+        count: limit,
         limit: limit
       )
-    end
 
-    result
+      Enum.take(rows, limit)
+    else
+      rows
+    end
   end
 
   @spec list_meta_connection_ids_for_user(User.t()) :: [binary()]
