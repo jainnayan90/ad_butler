@@ -8,13 +8,15 @@ Ecto.Adapters.SQL.Sandbox.mode(AdButler.Repo, :manual)
 :ok = Ecto.Adapters.SQL.Sandbox.checkout(AdButler.Repo)
 
 citext_ok =
-  case AdButler.Repo.query("SELECT 1 FROM pg_extension WHERE extname = 'citext'") do
-    {:ok, %{rows: [[1]]}} -> true
-    {:ok, _} -> false
-    {:error, reason} -> raise "citext probe failed — DB may be unhealthy: #{inspect(reason)}"
+  try do
+    case AdButler.Repo.query("SELECT 1 FROM pg_extension WHERE extname = 'citext'") do
+      {:ok, %{rows: [[1]]}} -> true
+      {:ok, _} -> false
+      {:error, reason} -> raise "citext probe failed — DB may be unhealthy: #{inspect(reason)}"
+    end
+  after
+    Ecto.Adapters.SQL.Sandbox.checkin(AdButler.Repo)
   end
-
-Ecto.Adapters.SQL.Sandbox.checkin(AdButler.Repo)
 
 excludes = if citext_ok, do: [], else: [:requires_citext]
 ExUnit.start(exclude: excludes)
