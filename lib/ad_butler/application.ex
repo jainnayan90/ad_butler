@@ -7,6 +7,8 @@ defmodule AdButler.Application do
 
   @impl true
   def start(_type, _args) do
+    :telemetry.detach("oban-job-lifecycle-logger")
+
     :ok =
       :telemetry.attach_many(
         "oban-job-lifecycle-logger",

@@ -30,6 +30,7 @@ defmodule AdButlerWeb.AuthController do
 
   def callback(conn, %{"error" => _error, "error_description" => description}) do
     conn
+    |> delete_session(:oauth_state)
     |> put_flash(:error, "OAuth error: #{description}")
     |> redirect(to: ~p"/")
   end
