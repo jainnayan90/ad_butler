@@ -22,7 +22,7 @@ defmodule AdButlerWeb.PlugAttack do
   defp client_ip(conn) do
     case Plug.Conn.get_req_header(conn, "fly-client-ip") do
       [ip_str | _] ->
-        case :inet.parse_address(to_charlist(ip_str)) do
+        case :inet.parse_address(ip_str |> String.trim() |> to_charlist()) do
           {:ok, addr} -> :inet.ntoa(addr) |> to_string()
           {:error, _} -> remote_ip(conn)
         end

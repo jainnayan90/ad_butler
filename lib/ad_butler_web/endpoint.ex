@@ -1,10 +1,11 @@
 defmodule AdButlerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :ad_butler
 
-  # @session_options is used for the LiveView socket connect_info macro (compile-time).
+  # @session_options is baked in at compile time and used only for the LiveView socket
+  # connect_info macro. Rotating salts here requires a full recompile and restart.
   # HTTP sessions use the session/2 function plug below, which reads Application env at
-  # request time. To rotate salts without a full restart: update config.exs, runtime.exs,
-  # and the env vars simultaneously (rotation invalidates all active sessions).
+  # request time and can pick up salt changes without recompiling (restart only).
+  # Either way, rotation invalidates all active sessions.
   @session_options [
     store: :cookie,
     key: "_ad_butler_key",
