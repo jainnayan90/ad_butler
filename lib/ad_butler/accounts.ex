@@ -1,6 +1,7 @@
 defmodule AdButler.Accounts do
   @moduledoc false
   import Ecto.Query
+  require Logger
 
   alias AdButler.Accounts.{MetaConnection, User}
   alias AdButler.Meta.Client
@@ -78,6 +79,35 @@ defmodule AdButler.Accounts do
     connection
     |> MetaConnection.changeset(attrs)
     |> Repo.update()
+  end
+
+  # Safety cap — for >1000 connections, replace with cursor-based batching.
+  @spec list_all_active_meta_connections(pos_integer()) :: [MetaConnection.t()]
+  def list_all_active_meta_connections(limit \\ 1000) do
+    result =
+      MetaConnection
+      |> where([mc], mc.status == "active")
+      |> limit(^limit)
+      |> Repo.all()
+
+    result_count = length(result)
+
+    if result_count >= limit do
+      Logger.error("list_all_active_meta_connections hit row limit — results truncated",
+        count: result_count,
+        limit: limit
+      )
+    end
+
+    result
+  end
+
+  @spec list_meta_connection_ids_for_user(User.t()) :: [binary()]
+  def list_meta_connection_ids_for_user(%User{id: user_id}) do
+    MetaConnection
+    |> where([mc], mc.user_id == ^user_id and mc.status == "active")
+    |> select([mc], mc.id)
+    |> Repo.all()
   end
 
   @spec list_meta_connections(User.t()) :: [MetaConnection.t()]

@@ -22,6 +22,13 @@ defmodule AdButlerWeb.Router do
     plug AdButlerWeb.Plugs.RequireAuthenticated
   end
 
+  scope "/health", AdButlerWeb do
+    pipe_through :health_check
+
+    get "/liveness", HealthController, :liveness
+    get "/readiness", HealthController, :readiness
+  end
+
   scope "/", AdButlerWeb do
     pipe_through :browser
 
@@ -36,6 +43,12 @@ defmodule AdButlerWeb.Router do
 
   pipeline :rate_limited do
     plug AdButlerWeb.PlugAttack
+  end
+
+  pipeline :health_check do
+    # Intentionally empty: no PlugAttack here. Fly probers share IPs and
+    # would trigger the rate limit, causing machine restart loops.
+    # The PlugAttack health rule below is kept for future per-IP limiting.
   end
 
   scope "/auth", AdButlerWeb do

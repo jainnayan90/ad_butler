@@ -7,6 +7,21 @@ import Config
 # before starting your production server.
 config :ad_butler, AdButlerWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
+# Session salts are read at compile time (endpoint.ex uses compile_env!). They must be
+# injected as build ARGs (e.g. fly secrets set --stage). Rotation requires recompile + restart.
+fetch_salt = fn name ->
+  case System.get_env(name) do
+    nil -> raise "environment variable #{name} is missing"
+    "" -> raise "environment variable #{name} must not be empty"
+    v when byte_size(v) < 8 -> raise "environment variable #{name} is too short (min 8 bytes)"
+    v -> v
+  end
+end
+
+config :ad_butler,
+  session_signing_salt: fetch_salt.("SESSION_SIGNING_SALT"),
+  session_encryption_salt: fetch_salt.("SESSION_ENCRYPTION_SALT")
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 
@@ -14,7 +29,9 @@ config :swoosh, api_client: Swoosh.ApiClient.Req
 config :swoosh, local: false
 
 # Do not print debug messages in production
-config :logger, level: :info
+config :logger, level: :info, backends: [LoggerJSON]
+
+config :logger_json, :backend, formatter: LoggerJSON.Formatters.Basic
 
 config :ad_butler, trusted_proxy: :fly
 

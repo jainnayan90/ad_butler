@@ -145,8 +145,17 @@ defmodule AdButler.Meta.Client do
 
         {:ok, %{access_token: token, expires_in: expires_in}}
 
-      {:ok, %{body: body}} ->
-        {:error, {:token_exchange_failed, body}}
+      {:ok, %{body: body}} when is_map(body) ->
+        safe = %{
+          code: get_in(body, ["error", "code"]),
+          type: get_in(body, ["error", "type"]),
+          subcode: get_in(body, ["error", "error_subcode"])
+        }
+
+        {:error, {:token_exchange_failed, safe}}
+
+      {:ok, %{status: status}} ->
+        {:error, {:token_exchange_failed, %{code: nil, type: nil, subcode: nil, status: status}}}
 
       {:error, reason} ->
         {:error, reason}

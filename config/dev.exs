@@ -93,9 +93,25 @@ config :swoosh, :api_client, false
 
 config :ad_butler, session_secure_cookie: false
 
+config :ad_butler,
+  session_signing_salt: "dev_signing_salt",
+  session_encryption_salt: "dev_encrypt_salt"
+
+config :ad_butler, AdButlerWeb.Endpoint, live_view: [signing_salt: "dev_lv_salt"]
+
+cloak_key_dev =
+  Base.decode64!(
+    System.get_env(
+      "CLOAK_KEY_DEV",
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+  )
+
+if byte_size(cloak_key_dev) != 32 do
+  raise "CLOAK_KEY_DEV must decode to exactly 32 bytes"
+end
+
 config :ad_butler, AdButler.Vault,
   ciphers: [
-    default:
-      {Cloak.Ciphers.AES.GCM,
-       tag: "AES.GCM.V1", key: Base.decode64!("DWd3enw3lCLQQhOo7zcLHBUds5byv33NIJuHMvqG114=")}
+    default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: cloak_key_dev}
   ]

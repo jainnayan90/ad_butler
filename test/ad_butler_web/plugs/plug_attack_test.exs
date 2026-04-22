@@ -40,8 +40,15 @@ defmodule AdButlerWeb.PlugAttackTest do
 
   describe "fly-client-ip header" do
     setup do
+      original = Application.get_env(:ad_butler, :trusted_proxy)
       Application.put_env(:ad_butler, :trusted_proxy, :fly)
-      on_exit(fn -> Application.put_env(:ad_butler, :trusted_proxy, false) end)
+
+      on_exit(fn ->
+        case original do
+          nil -> Application.delete_env(:ad_butler, :trusted_proxy)
+          val -> Application.put_env(:ad_butler, :trusted_proxy, val)
+        end
+      end)
     end
 
     test "valid fly-client-ip is used as rate-limit key, not remote_ip" do
