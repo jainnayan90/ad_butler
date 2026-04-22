@@ -12,13 +12,16 @@ defmodule AdButler.Workers.TokenRefreshSweepWorker do
 
   @default_limit 500
 
-  # Enqueue a refresh job for active connections expiring within 70 days.
-  # Catches connections that slipped through normal scheduling (e.g. after a
-  # deploy with no running workers). TokenRefreshWorker is unique-keyed by
-  # meta_connection_id over 23h, so Oban handles deduplication at insert time.
+  # 15 days is intentionally larger than TokenRefreshWorker's @refresh_buffer_days (10).
+  # The normal path schedules a refresh at (expiry - 10 days); the sweep's job is to
+  # catch connections where that scheduling was missed (e.g. after a deploy with no
+  # running workers). Using 70 days would match every active 60-day Meta token on
+  # every run, turning the catch-up sweep into a continuous hammer.
+  @sweep_days_ahead 15
+
   @impl Oban.Worker
   def perform(_job) do
-    connections = Accounts.list_expiring_meta_connections(70, @default_limit)
+    connections = Accounts.list_expiring_meta_connections(@sweep_days_ahead, @default_limit)
 
     if length(connections) == @default_limit do
       Logger.warning(

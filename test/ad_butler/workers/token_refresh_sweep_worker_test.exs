@@ -11,11 +11,11 @@ defmodule AdButler.Workers.TokenRefreshSweepWorkerTest do
       assert :ok = perform_job(TokenRefreshSweepWorker, %{})
     end
 
-    test "enqueues refresh job for active connection expiring within 70 days" do
+    test "enqueues refresh job for active connection expiring within 15 days" do
       conn =
         insert(:meta_connection,
           status: "active",
-          token_expires_at: DateTime.add(DateTime.utc_now(), 30 * 86_400, :second)
+          token_expires_at: DateTime.add(DateTime.utc_now(), 10 * 86_400, :second)
         )
 
       assert :ok = perform_job(TokenRefreshSweepWorker, %{})
@@ -41,10 +41,10 @@ defmodule AdButler.Workers.TokenRefreshSweepWorkerTest do
       )
     end
 
-    test "does not enqueue for connections expiring beyond 70 days" do
+    test "does not enqueue for connections expiring beyond 15 days" do
       insert(:meta_connection,
         status: "active",
-        token_expires_at: DateTime.add(DateTime.utc_now(), 100 * 86_400, :second)
+        token_expires_at: DateTime.add(DateTime.utc_now(), 20 * 86_400, :second)
       )
 
       assert :ok = perform_job(TokenRefreshSweepWorker, %{})
