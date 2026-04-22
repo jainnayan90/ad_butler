@@ -62,6 +62,13 @@ defmodule AdButlerWeb.AuthController do
     end
   end
 
+  def callback(conn, _params) do
+    conn
+    |> delete_session(:oauth_state)
+    |> put_flash(:error, "Invalid OAuth callback. Please try again.")
+    |> redirect(to: ~p"/")
+  end
+
   @state_ttl_seconds 600
 
   defp verify_state(conn, state) do
