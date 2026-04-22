@@ -136,11 +136,6 @@ defmodule AdButler.Workers.TokenRefreshWorker do
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to schedule next refresh",
-          meta_connection_id: connection.id,
-          reason: reason
-        )
-
         {:error, reason}
     end
   end
