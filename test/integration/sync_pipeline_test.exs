@@ -17,7 +17,7 @@ defmodule AdButler.Integration.SyncPipelineTest do
   setup :verify_on_exit!
   setup :set_mox_global
 
-  test "full sync flow: fetch ad accounts → publish → Broadway consumes → upserts campaigns" do
+  test "FetchAdAccountsWorker upserts ad accounts and publishes sync message" do
     user = insert(:user)
     conn = insert(:meta_connection, user: user)
 

@@ -27,10 +27,10 @@ defmodule Mix.Tasks.AdButler.ReplayDlqUnitTest do
   end
 
   test "nacks message and stops draining when publish fails" do
-    result = ReplayDlq.drain_dlq(:fake_channel, 10, 2)
+    result = ReplayDlq.drain_dlq(:fake_channel, 10, 0)
 
     assert_received {:nacked, :tag1}
-    assert result == 2
+    assert result == 0
   end
 end
 
