@@ -42,6 +42,8 @@ config :phoenix,
 
 config :ad_butler, session_secure_cookie: false
 
+config :ad_butler, trusted_proxy: false
+
 config :ad_butler, :meta_client, AdButler.Meta.ClientMock
 
 config :ad_butler, Oban, testing: :manual

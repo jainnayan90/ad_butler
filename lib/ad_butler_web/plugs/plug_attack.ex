@@ -20,15 +20,19 @@ defmodule AdButlerWeb.PlugAttack do
   # The value is validated as a well-formed IP address before use so that
   # a spoofed or malformed header cannot bypass throttling or inflate ETS keys.
   defp client_ip(conn) do
-    case Plug.Conn.get_req_header(conn, "fly-client-ip") do
-      [ip_str | _] ->
-        case :inet.parse_address(ip_str |> String.trim() |> to_charlist()) do
-          {:ok, addr} -> :inet.ntoa(addr) |> to_string()
-          {:error, _} -> remote_ip(conn)
-        end
+    if Application.get_env(:ad_butler, :trusted_proxy) == :fly do
+      case Plug.Conn.get_req_header(conn, "fly-client-ip") do
+        [ip_str | _] ->
+          case :inet.parse_address(ip_str |> String.trim() |> to_charlist()) do
+            {:ok, addr} -> :inet.ntoa(addr) |> to_string()
+            {:error, _} -> remote_ip(conn)
+          end
 
-      [] ->
-        remote_ip(conn)
+        [] ->
+          remote_ip(conn)
+      end
+    else
+      remote_ip(conn)
     end
   end
 
