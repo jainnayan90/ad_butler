@@ -8,10 +8,26 @@ defmodule AdButlerWeb.HealthController do
     send_resp(conn, 200, "ok")
   end
 
+  @db_check_ttl_seconds 10
+
   def readiness(conn, _params) do
-    case db_ping() do
+    case cached_db_ping() do
       {:ok, _} -> send_resp(conn, 200, "ok")
       {:error, _} -> send_resp(conn, 503, "unavailable")
+    end
+  end
+
+  defp cached_db_ping do
+    now = System.os_time(:second)
+
+    case :persistent_term.get(:health_db_last_ok, nil) do
+      ts when is_integer(ts) and now - ts < @db_check_ttl_seconds ->
+        {:ok, :cached}
+
+      _ ->
+        result = db_ping()
+        if match?({:ok, _}, result), do: :persistent_term.put(:health_db_last_ok, now)
+        result
     end
   end
 

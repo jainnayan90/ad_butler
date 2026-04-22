@@ -18,6 +18,12 @@ defmodule AdButler.Messaging.Publisher do
     GenServer.call(__MODULE__, {:publish, payload})
   end
 
+  @spec await_connected(timeout()) :: :ok | {:error, :timeout}
+  def await_connected(timeout \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_connected(deadline)
+  end
+
   @impl GenServer
   def init(_opts) do
     send(self(), :connect)
@@ -25,6 +31,14 @@ defmodule AdButler.Messaging.Publisher do
   end
 
   @impl GenServer
+  def handle_call(:connected?, _from, %{channel: nil} = state) do
+    {:reply, false, state}
+  end
+
+  def handle_call(:connected?, _from, state) do
+    {:reply, true, state}
+  end
+
   def handle_call({:publish, _payload}, _from, %{channel: nil} = state) do
     {:reply, {:error, :not_connected}, state}
   end
@@ -97,10 +111,59 @@ defmodule AdButler.Messaging.Publisher do
     end
   end
 
-  defp reconnect(%{conn_ref: conn_ref, channel_ref: channel_ref} = state) do
+  @impl GenServer
+  def terminate(_reason, state) do
+    if ref = Map.get(state, :conn_ref), do: Process.demonitor(ref, [:flush])
+    if ref = Map.get(state, :channel_ref), do: Process.demonitor(ref, [:flush])
+    close_amqp_channel(Map.get(state, :channel))
+    close_amqp_connection(Map.get(state, :conn))
+  end
+
+  defp do_await_connected(deadline) do
+    if GenServer.call(__MODULE__, :connected?) do
+      :ok
+    else
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        {:error, :timeout}
+      else
+        Process.sleep(50)
+        do_await_connected(deadline)
+      end
+    end
+  end
+
+  defp reconnect(
+         %{conn: conn, channel: channel, conn_ref: conn_ref, channel_ref: channel_ref} = state
+       ) do
     if conn_ref, do: Process.demonitor(conn_ref, [:flush])
     if channel_ref, do: Process.demonitor(channel_ref, [:flush])
+    close_amqp_channel(channel)
+    close_amqp_connection(conn)
     do_connect(%{state | conn: nil, channel: nil, conn_ref: nil, channel_ref: nil})
+  end
+
+  defp close_amqp_channel(nil), do: :ok
+
+  defp close_amqp_channel(channel) do
+    try do
+      AMQP.Channel.close(channel)
+    catch
+      :exit, _ -> :ok
+      :error, _ -> :ok
+    end
+  end
+
+  defp close_amqp_connection(nil), do: :ok
+
+  defp close_amqp_connection(conn) do
+    try do
+      AMQP.Connection.close(conn)
+    catch
+      :exit, _ -> :ok
+      :error, _ -> :ok
+    end
   end
 
   # Avoid leaking AMQP URL (which may contain credentials) in logs

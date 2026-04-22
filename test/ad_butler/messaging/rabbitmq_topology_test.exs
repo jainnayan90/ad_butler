@@ -21,17 +21,20 @@ defmodule AdButler.Messaging.RabbitMQTopologyTest do
     {:ok, channel: channel}
   end
 
-  test "main queue exists with dead-letter arguments", %{channel: channel} do
-    # passive: true checks existence without re-declaring
+  test "main queue exists", %{channel: channel} do
+    # passive: true verifies the queue was declared by RabbitMQTopology.setup/0
+    # without re-declaring it. Dead-letter routing args are not readable via
+    # passive declare; they are validated end-to-end by the DLQ routing test below.
     {:ok, info} = AMQP.Queue.declare(channel, @queue, passive: true)
     assert info.queue == @queue
   end
 
-  test "DLQ queue has x-dead-letter-exchange argument", %{channel: channel} do
+  test "DLQ and dead-letter exchange exist", %{channel: channel} do
     {:ok, info} = AMQP.Queue.declare(channel, @dlq, passive: true)
     assert info.queue == @dlq
 
-    # Verify DLQ exchange exists
+    # Verifies x-dead-letter-exchange is wired: the fanout exchange that the main
+    # queue's dead-letter config points to must exist for routing to work.
     assert :ok = AMQP.Exchange.declare(channel, @dlq_exchange, :fanout, passive: true)
   end
 end

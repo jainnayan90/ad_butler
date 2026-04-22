@@ -12,23 +12,25 @@ defmodule AdButler.Messaging.PublisherTest do
   @queue "ad_butler.sync.metadata"
 
   setup do
-    # Ensure topology exists before publishing
     :ok = RabbitMQTopology.setup()
     {:ok, pid} = start_supervised(Publisher)
-    {:ok, publisher: pid}
-  end
-
-  test "publish/1 delivers message to queue" do
-    payload = Jason.encode!(%{ad_account_id: "act_123", sync_type: "full"})
-    assert :ok = Publisher.publish(payload)
+    :ok = Publisher.await_connected()
 
     url = Application.fetch_env!(:ad_butler, :rabbitmq)[:url]
     {:ok, conn} = AMQP.Connection.open(url)
     {:ok, channel} = AMQP.Channel.open(conn)
+    AMQP.Queue.purge(channel, @queue)
+
+    on_exit(fn -> AMQP.Connection.close(conn) end)
+
+    {:ok, publisher: pid, channel: channel}
+  end
+
+  test "publish/1 delivers message to queue", %{channel: channel} do
+    payload = Jason.encode!(%{ad_account_id: "act_123", sync_type: "full"})
+    assert :ok = Publisher.publish(payload)
 
     {:ok, message, _meta} = AMQP.Basic.get(channel, @queue, no_ack: true)
     assert message == payload
-
-    AMQP.Connection.close(conn)
   end
 end
