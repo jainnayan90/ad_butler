@@ -16,5 +16,7 @@ config :swoosh, local: false
 # Do not print debug messages in production
 config :logger, level: :info
 
+config :ad_butler, trusted_proxy: :fly
+
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

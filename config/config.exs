@@ -10,7 +10,7 @@ import Config
 config :ad_butler,
   ecto_repos: [AdButler.Repo],
   generators: [timestamp_type: :utc_datetime],
-  trusted_proxy: :fly
+  trusted_proxy: false
 
 # Configure the endpoint
 config :ad_butler,

@@ -93,8 +93,6 @@ config :swoosh, :api_client, false
 
 config :ad_butler, session_secure_cookie: false
 
-config :ad_butler, trusted_proxy: false
-
 config :ad_butler, AdButler.Vault,
   ciphers: [
     default:
