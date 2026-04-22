@@ -39,36 +39,40 @@ defmodule AdButlerWeb.PlugAttackTest do
   end
 
   describe "fly-client-ip header" do
-    test "valid fly-client-ip is used as rate-limit key" do
-      ip_str = "203.0.113.#{unique_octet()}"
+    setup do
+      Application.put_env(:ad_butler, :trusted_proxy, :fly)
+      on_exit(fn -> Application.put_env(:ad_butler, :trusted_proxy, false) end)
+    end
 
-      conn =
+    test "valid fly-client-ip is used as rate-limit key, not remote_ip" do
+      fly_ip = "203.0.113.#{unique_octet()}"
+
+      # All requests appear to come from localhost, but fly-client-ip is the real key
+      conn_with_fly =
         conn_with_ip({127, 0, 0, 1})
-        |> Plug.Conn.put_req_header("fly-client-ip", ip_str)
+        |> Plug.Conn.put_req_header("fly-client-ip", fly_ip)
 
-      for _i <- 1..10 do
-        AdButlerWeb.PlugAttack.call(conn, [])
-      end
+      for _i <- 1..10, do: AdButlerWeb.PlugAttack.call(conn_with_fly, [])
 
-      assert AdButlerWeb.PlugAttack.call(conn, []).halted
+      # 11th with same fly IP is blocked
+      assert AdButlerWeb.PlugAttack.call(conn_with_fly, []).halted
+
+      # Same remote_ip but NO fly header → different bucket, not blocked
+      conn_no_header = conn_with_ip({127, 0, 0, 1})
+      refute AdButlerWeb.PlugAttack.call(conn_no_header, []).halted
     end
 
     test "spoofed (non-IP) fly-client-ip falls back to remote_ip" do
       {a, b, c, d} = {10, unique_octet(), 1, 1}
       conn = conn_with_ip({a, b, c, d})
 
-      # Poison the header with a non-IP value — should be ignored,
-      # throttle bucket is keyed by remote_ip
       conn_spoofed =
         conn
         |> Plug.Conn.put_req_header("fly-client-ip", "not-an-ip-address")
 
-      for _i <- 1..10 do
-        AdButlerWeb.PlugAttack.call(conn_spoofed, [])
-      end
+      for _i <- 1..10, do: AdButlerWeb.PlugAttack.call(conn_spoofed, [])
 
-      # 11th request from the SAME remote_ip (via a different header value)
-      # is still blocked because the key fell back to remote_ip
+      # 11th from the same remote_ip is blocked — header was ignored, key = remote_ip
       assert AdButlerWeb.PlugAttack.call(conn, []).halted
     end
   end
