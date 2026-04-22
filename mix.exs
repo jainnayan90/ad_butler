@@ -91,10 +91,11 @@ defmodule AdButler.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind ad_butler", "esbuild ad_butler"],
+      "assets.build": ["compile", "tailwind ad_butler", "esbuild ad_butler", "esbuild theme"],
       "assets.deploy": [
         "tailwind ad_butler --minify",
         "esbuild ad_butler --minify",
+        "esbuild theme --minify",
         "phx.digest"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

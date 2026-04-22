@@ -2,8 +2,11 @@ defmodule AdButlerWeb.AuthControllerTest do
   use AdButlerWeb.ConnCase, async: false
 
   import Mox
+  import AdButler.Factory
 
+  alias AdButler.Accounts
   alias AdButler.Meta.ClientMock
+  alias AdButler.Repo
 
   setup :verify_on_exit!
 
@@ -69,6 +72,17 @@ defmodule AdButlerWeb.AuthControllerTest do
   describe "GET /auth/meta/callback (second auth / upsert)" do
     test "second OAuth callback with same Meta user upserts connection and redirects to /dashboard",
          %{conn: conn} do
+      meta_user_id = "987654321"
+
+      existing_user =
+        insert(:user, meta_user_id: meta_user_id, email: "existing@example.com", name: "Old Name")
+
+      insert(:meta_connection,
+        user: existing_user,
+        meta_user_id: meta_user_id,
+        access_token: "old_token"
+      )
+
       state = "test_state_upsert"
 
       conn =
@@ -77,11 +91,11 @@ defmodule AdButlerWeb.AuthControllerTest do
         |> put_session(:oauth_state, {state, System.system_time(:second)})
 
       expect(ClientMock, :exchange_code, fn _code ->
-        {:ok, %{access_token: "fake_access_token_2", expires_in: 86_400}}
+        {:ok, %{access_token: "new_token_after_upsert", expires_in: 86_400}}
       end)
 
       expect(ClientMock, :get_me, fn _token ->
-        {:ok, %{meta_user_id: "123456789", name: "Test User", email: "testuser@example.com"}}
+        {:ok, %{meta_user_id: meta_user_id, name: "New Name", email: "existing@example.com"}}
       end)
 
       conn =
@@ -91,7 +105,19 @@ defmodule AdButlerWeb.AuthControllerTest do
         })
 
       assert redirected_to(conn) =~ "/dashboard"
-      assert get_session(conn, :user_id) != nil
+      assert get_session(conn, :user_id) == existing_user.id
+
+      user_count =
+        Repo.aggregate(AdButler.Accounts.User, :count, :id)
+
+      assert user_count == 1
+
+      connection =
+        Accounts.get_meta_connection!(
+          List.first(Accounts.list_meta_connections(existing_user)).id
+        )
+
+      assert connection.access_token != "old_token"
     end
   end
 
