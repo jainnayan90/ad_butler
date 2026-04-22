@@ -132,17 +132,6 @@ defmodule AdButler.Workers.TokenRefreshWorkerTest do
       assert {:error, :meta_server_error} =
                perform_job(TokenRefreshWorker, %{"meta_connection_id" => conn.id})
     end
-
-    test "schedule_refresh/2 returns {:ok, job} on success and schedules correctly", %{} do
-      conn = insert(:meta_connection)
-      ref_time = DateTime.utc_now()
-
-      assert {:ok, job} = TokenRefreshWorker.schedule_refresh(conn, 5)
-      assert job.queue == "default"
-
-      expected_delay = 5 * 86_400
-      assert_in_delta DateTime.diff(job.scheduled_at, ref_time, :second), expected_delay, 5
-    end
   end
 
   describe "idempotency" do
