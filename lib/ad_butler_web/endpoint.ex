@@ -1,14 +1,20 @@
 defmodule AdButlerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :ad_butler
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # @session_options is frozen at compile time (compile_env!) and used only for the
+  # LiveView socket connect_info macro. Salt values set in runtime.exs are NOT picked
+  # up here without a full recompile. Rotating these salts requires recompile + restart.
+  # HTTP sessions use the session/2 function plug below, which reads Application env on
+  # every request via fetch_env!, so runtime env updates (e.g. hot config reload) take
+  # effect immediately — no restart needed. Either way, rotation invalidates all sessions.
   @session_options [
     store: :cookie,
     key: "_ad_butler_key",
-    signing_salt: "rfEmV5o0",
-    same_site: "Lax"
+    signing_salt: Application.compile_env!(:ad_butler, :session_signing_salt),
+    encryption_salt: Application.compile_env!(:ad_butler, :session_encryption_salt),
+    same_site: "Lax",
+    http_only: true,
+    secure: Application.compile_env(:ad_butler, :session_secure_cookie, true)
   ]
 
   socket "/live", Phoenix.LiveView.Socket,
@@ -54,6 +60,25 @@ defmodule AdButlerWeb.Endpoint do
 
   plug Plug.MethodOverride
   plug Plug.Head
-  plug Plug.Session, @session_options
+  plug :session
   plug AdButlerWeb.Router
+
+  # Reads session salts from Application env on every request (fetch_env!), so salt
+  # updates applied at runtime (e.g. via hot config reload) take effect immediately
+  # without a restart. fetch_env! raises on the first request if a key is missing,
+  # surfacing misconfiguration immediately rather than silently using defaults.
+  defp session(conn, _opts) do
+    opts =
+      Plug.Session.init(
+        store: :cookie,
+        key: "_ad_butler_key",
+        signing_salt: Application.fetch_env!(:ad_butler, :session_signing_salt),
+        encryption_salt: Application.fetch_env!(:ad_butler, :session_encryption_salt),
+        same_site: "Lax",
+        http_only: true,
+        secure: Application.get_env(:ad_butler, :session_secure_cookie, true)
+      )
+
+    Plug.Session.call(conn, opts)
+  end
 end

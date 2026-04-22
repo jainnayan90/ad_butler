@@ -90,3 +90,12 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+config :ad_butler, session_secure_cookie: false
+
+config :ad_butler, AdButler.Vault,
+  ciphers: [
+    default:
+      {Cloak.Ciphers.AES.GCM,
+       tag: "AES.GCM.V1", key: Base.decode64!("DWd3enw3lCLQQhOo7zcLHBUds5byv33NIJuHMvqG114=")}
+  ]

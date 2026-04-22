@@ -1,0 +1,31 @@
+defmodule AdButler.Accounts.User do
+  @moduledoc false
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @type t :: %__MODULE__{}
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+
+  schema "users" do
+    field :email, :string
+    field :meta_user_id, :string
+    field :name, :string
+
+    has_many :meta_connections, AdButler.Accounts.MetaConnection
+
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(user, attrs) do
+    user
+    |> cast(attrs, [:email, :meta_user_id, :name])
+    |> validate_required([:email, :meta_user_id])
+    |> validate_format(:email, ~r/@/)
+    |> validate_format(:meta_user_id, ~r/^[1-9]\d{0,19}$/)
+    |> unique_constraint(:meta_user_id)
+    |> unique_constraint(:email)
+  end
+end

@@ -39,3 +39,21 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+config :ad_butler, session_secure_cookie: false
+
+config :ad_butler, :meta_client, AdButler.Meta.ClientMock
+
+config :ad_butler, Oban, testing: :manual
+
+config :ad_butler, AdButler.Vault,
+  ciphers: [
+    default:
+      {Cloak.Ciphers.AES.GCM,
+       tag: "AES.GCM.V1", key: Base.decode64!("YWRfYnV0bGVyX3Rlc3Rfa2V5X2Zvcl90ZXN0aW5nISE=")}
+  ]
+
+config :ad_butler,
+  meta_app_id: "test_meta_app_id",
+  meta_app_secret: "test_meta_app_secret",
+  meta_oauth_callback_url: "http://localhost/auth/meta/callback"
