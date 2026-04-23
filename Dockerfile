@@ -19,6 +19,7 @@ COPY config config
 COPY priv priv
 COPY lib lib
 COPY assets assets
+COPY rel rel
 
 RUN --mount=type=secret,id=SESSION_SIGNING_SALT \
     --mount=type=secret,id=SESSION_ENCRYPTION_SALT \

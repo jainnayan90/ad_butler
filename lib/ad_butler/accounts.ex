@@ -92,7 +92,6 @@ defmodule AdButler.Accounts do
 
     if length(rows) > limit do
       Logger.error("list_all_active_meta_connections hit row limit — results truncated",
-        count: limit,
         limit: limit
       )
 
