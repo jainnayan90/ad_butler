@@ -61,10 +61,15 @@ defmodule AdButler.Integration.SyncPipelineTest do
     {:ok, channel} = AMQP.Channel.open(conn)
     on_exit(fn -> AMQP.Connection.close(conn) end)
 
-    # Publish 3 messages to DLQ directly
     dlq = "ad_butler.sync.metadata.dlq"
     dlq_exchange = "ad_butler.sync.dlq.fanout"
+    main_queue = "ad_butler.sync.metadata"
 
+    # Purge both queues for a clean baseline
+    AMQP.Queue.purge(channel, dlq)
+    AMQP.Queue.purge(channel, main_queue)
+
+    # Publish 3 messages to DLQ directly
     Enum.each(1..3, fn i ->
       AMQP.Basic.publish(channel, dlq_exchange, "", Jason.encode!(%{test: i}), persistent: true)
     end)
@@ -72,8 +77,11 @@ defmodule AdButler.Integration.SyncPipelineTest do
     # Run the DLQ replay task
     ReplayDlq.run(["--limit", "10"])
 
-    # Assert DLQ is empty
+    # Assert DLQ is empty and all 3 messages moved to main queue
     {:ok, %{message_count: dlq_count}} = AMQP.Queue.declare(channel, dlq, passive: true)
+    {:ok, %{message_count: main_count}} = AMQP.Queue.declare(channel, main_queue, passive: true)
+
     assert dlq_count == 0
+    assert main_count == 3
   end
 end
