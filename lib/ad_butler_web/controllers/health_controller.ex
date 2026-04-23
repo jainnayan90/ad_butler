@@ -18,7 +18,7 @@ defmodule AdButlerWeb.HealthController do
   end
 
   defp cached_db_ping do
-    now = System.os_time(:second)
+    now = System.monotonic_time(:second)
 
     case :persistent_term.get(:health_db_last_ok, nil) do
       ts when is_integer(ts) and now - ts < @db_check_ttl_seconds ->

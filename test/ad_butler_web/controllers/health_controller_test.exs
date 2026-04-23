@@ -15,11 +15,9 @@ defmodule AdButlerWeb.HealthControllerTest do
     end
 
     test "returns 503 when DB is unavailable", %{conn: conn} do
-      try do
-        :persistent_term.erase(:health_db_last_ok)
-      catch
-        :error, :badarg -> :ok
-      end
+      # Write a stale monotonic timestamp to ensure the cache is expired
+      stale_ts = System.monotonic_time(:second) - 60
+      :persistent_term.put(:health_db_last_ok, stale_ts)
 
       Application.put_env(:ad_butler, :db_ping_fn, fn -> {:error, :timeout} end)
       on_exit(fn -> Application.delete_env(:ad_butler, :db_ping_fn) end)
