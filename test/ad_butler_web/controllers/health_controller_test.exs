@@ -15,7 +15,12 @@ defmodule AdButlerWeb.HealthControllerTest do
     end
 
     test "returns 503 when DB is unavailable", %{conn: conn} do
-      :persistent_term.erase(:health_db_last_ok)
+      try do
+        :persistent_term.erase(:health_db_last_ok)
+      catch
+        :error, :badarg -> :ok
+      end
+
       Application.put_env(:ad_butler, :db_ping_fn, fn -> {:error, :timeout} end)
       on_exit(fn -> Application.delete_env(:ad_butler, :db_ping_fn) end)
 

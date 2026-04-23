@@ -232,7 +232,7 @@ defmodule AdButler.AdsTest do
   describe "upsert_ad/2" do
     test "inserts on first call" do
       aa = insert(:ad_account)
-      ad_set = insert(:ad_set, ad_account: aa)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
       attrs = %{meta_id: "ad_1", name: "Original", status: "ACTIVE", ad_set_id: ad_set.id}
 
       assert {:ok, ad} = Ads.upsert_ad(aa, attrs)
@@ -241,7 +241,7 @@ defmodule AdButler.AdsTest do
 
     test "updates on duplicate (ad_account_id, meta_id)" do
       aa = insert(:ad_account)
-      ad_set = insert(:ad_set, ad_account: aa)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
       attrs = %{meta_id: "ad_1", name: "Original", status: "ACTIVE", ad_set_id: ad_set.id}
 
       {:ok, first} = Ads.upsert_ad(aa, attrs)
@@ -310,7 +310,7 @@ defmodule AdButler.AdsTest do
   describe "bulk_upsert_ads/2" do
     test "inserts rows and returns {count, [%{id, meta_id}]}" do
       aa = insert(:ad_account)
-      ad_set = insert(:ad_set, ad_account: aa)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
 
       attrs = [
         %{meta_id: "ad_1", name: "Ad One", status: "ACTIVE", ad_set_id: ad_set.id}
@@ -322,7 +322,7 @@ defmodule AdButler.AdsTest do
 
     test "is idempotent on (ad_account_id, meta_id) — same ID returned, name updated" do
       aa = insert(:ad_account)
-      ad_set = insert(:ad_set, ad_account: aa)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
       attrs = [%{meta_id: "ad_1", name: "Original", status: "ACTIVE", ad_set_id: ad_set.id}]
 
       {1, [%{id: id}]} = Ads.bulk_upsert_ads(aa, attrs)
