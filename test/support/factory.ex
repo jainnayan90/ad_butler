@@ -63,6 +63,9 @@ defmodule AdButler.Factory do
     }
   end
 
+  # ExMachina note: ad_account is derived from the internally-built ad_set so the default
+  # graph is consistent. Overriding only ad_set: (without ad_account:) or only ad_account:
+  # (without ad_set:) will diverge the two associations — callers must pass both explicitly.
   def ad_factory do
     ad_set = build(:ad_set)
 
