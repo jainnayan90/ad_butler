@@ -4,12 +4,15 @@ defmodule AdButlerWeb.PlugAttack do
 
   # 10 requests per 60 seconds per (client IP, route) on OAuth routes.
   # Keying by path prevents a flood on one route from consuming another's bucket.
+  # Health paths are excluded so their separate looser limit (below) can apply.
   rule "oauth rate limit", conn do
-    throttle({client_ip(conn), conn.request_path},
-      period: 60_000,
-      limit: 10,
-      storage: {PlugAttack.Storage.Ets, :plug_attack_storage}
-    )
+    if not String.starts_with?(conn.request_path, "/health") do
+      throttle({client_ip(conn), conn.request_path},
+        period: 60_000,
+        limit: 10,
+        storage: {PlugAttack.Storage.Ets, :plug_attack_storage}
+      )
+    end
   end
 
   # 60 requests per 60 seconds per IP for health probe endpoints.

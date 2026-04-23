@@ -20,7 +20,16 @@ defmodule AdButlerWeb.HealthControllerTest do
       :persistent_term.put(:health_db_last_ok, stale_ts)
 
       Application.put_env(:ad_butler, :db_ping_fn, fn -> {:error, :timeout} end)
-      on_exit(fn -> Application.delete_env(:ad_butler, :db_ping_fn) end)
+
+      on_exit(fn ->
+        Application.delete_env(:ad_butler, :db_ping_fn)
+
+        try do
+          :persistent_term.erase(:health_db_last_ok)
+        catch
+          :error, :badarg -> :ok
+        end
+      end)
 
       conn = get(conn, ~p"/health/readiness")
       assert response(conn, 503) == "unavailable"
