@@ -48,30 +48,25 @@ defmodule AdButler.Factory do
   end
 
   def ad_set_factory do
-    ad_account = build(:ad_account)
-    campaign = build(:campaign, ad_account: ad_account)
-
-    struct!(AdSet, %{
-      ad_account: ad_account,
-      campaign: campaign,
+    %AdSet{
+      ad_account: build(:ad_account),
+      campaign: build(:campaign),
       meta_id: sequence(:ad_set_meta_id, &"adset_#{100 + &1}"),
       name: sequence(:ad_set_name, &"Ad Set #{&1}"),
       status: "ACTIVE",
       raw_jsonb: %{}
-    })
+    }
   end
 
   def ad_factory do
-    ad_set = build(:ad_set)
-
-    struct!(Ad, %{
-      ad_account: ad_set.ad_account,
-      ad_set: ad_set,
+    %Ad{
+      ad_account: build(:ad_account),
+      ad_set: build(:ad_set),
       meta_id: sequence(:ad_meta_id, &"ad_#{100 + &1}"),
       name: sequence(:ad_name, &"Ad #{&1}"),
       status: "ACTIVE",
       raw_jsonb: %{}
-    })
+    }
   end
 
   def creative_factory do
