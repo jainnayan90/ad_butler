@@ -14,9 +14,10 @@ config :ad_butler,
   env: config_env()
 
 # Configure the endpoint
-# Session salts (session_signing_salt, session_encryption_salt) and live_view signing_salt
-# are compile-time only. They are set per-environment in dev.exs/test.exs, and injected at
-# build time for prod. See runtime.exs for details.
+# Session salts (session_signing_salt, session_encryption_salt) are baked into the release
+# image for prod (compile_env! for the LiveView socket, fetch_env! for the HTTP session plug).
+# They are set per-environment in dev.exs/test.exs. LiveView signing_salt is runtime-only:
+# it is read from LIVE_VIEW_SIGNING_SALT at startup (see runtime.exs).
 config :ad_butler, AdButlerWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
