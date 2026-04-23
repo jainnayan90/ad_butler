@@ -12,7 +12,12 @@ defmodule AdButler.MixProject do
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader],
-      test_coverage: [summary: [threshold: 0]]
+      test_coverage: [summary: [threshold: 0]],
+      releases: [
+        ad_butler: [
+          include_executables_for: [:unix]
+        ]
+      ]
     ]
   end
 
@@ -74,7 +79,8 @@ defmodule AdButler.MixProject do
       {:ex_machina, "~> 2.8", only: [:test, :dev]},
       {:plug_attack, "~> 0.4"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.0", only: [:dev], runtime: false}
+      {:broadway_rabbitmq, "~> 0.8"},
+      {:logger_json, "~> 6.0"}
     ]
   end
 

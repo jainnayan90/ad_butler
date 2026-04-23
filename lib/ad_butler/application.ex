@@ -5,6 +5,9 @@ defmodule AdButler.Application do
 
   use Application
 
+  alias AdButler.ErrorHelpers
+  alias AdButler.Messaging.RabbitMQTopology
+
   @impl true
   def start(_type, _args) do
     :telemetry.detach("oban-job-lifecycle-logger")
@@ -17,23 +20,71 @@ defmodule AdButler.Application do
         nil
       )
 
-    children = [
-      AdButlerWeb.Telemetry,
-      AdButler.Vault,
-      AdButler.Repo,
-      {DNSCluster, query: Application.get_env(:ad_butler, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: AdButler.PubSub},
-      AdButler.Meta.RateLimitStore,
-      {PlugAttack.Storage.Ets, name: :plug_attack_storage, clean_period: 60_000},
-      {Oban, Application.fetch_env!(:ad_butler, Oban)},
-      # Start to serve requests, typically the last entry
-      AdButlerWeb.Endpoint
-    ]
+    env = Application.get_env(:ad_butler, :env, :prod)
+
+    children =
+      [
+        AdButlerWeb.Telemetry,
+        AdButler.Vault,
+        AdButler.Repo,
+        {DNSCluster, query: Application.get_env(:ad_butler, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: AdButler.PubSub},
+        AdButler.Meta.RateLimitStore,
+        {PlugAttack.Storage.Ets, name: :plug_attack_storage, clean_period: 60_000},
+        {Oban, Application.fetch_env!(:ad_butler, Oban)},
+        {Task.Supervisor, name: AdButler.TaskSupervisor}
+      ] ++
+        if env != :test do
+          [
+            AdButler.Messaging.Publisher,
+            AdButler.Sync.MetadataPipeline
+          ]
+        else
+          []
+        end ++
+        [
+          # Start to serve requests, typically the last entry
+          AdButlerWeb.Endpoint
+        ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: AdButler.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    if env != :test do
+      Task.Supervisor.start_child(AdButler.TaskSupervisor, &setup_rabbitmq_topology/0)
+    end
+
+    result
+  end
+
+  defp setup_rabbitmq_topology do
+    require Logger
+    do_setup_rabbitmq_topology(3)
+  end
+
+  defp do_setup_rabbitmq_topology(0) do
+    require Logger
+    Logger.error("RabbitMQ topology setup failed after all retries")
+  end
+
+  defp do_setup_rabbitmq_topology(attempts_left) do
+    require Logger
+
+    case RabbitMQTopology.setup() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("RabbitMQ topology setup failed, retrying",
+          reason: ErrorHelpers.safe_reason(reason),
+          attempts_left: attempts_left - 1
+        )
+
+        Process.sleep(2_000)
+        do_setup_rabbitmq_topology(attempts_left - 1)
+    end
   end
 
   def handle_oban_event(

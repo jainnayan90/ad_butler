@@ -11,7 +11,12 @@ defmodule AdButler.Meta.Client do
   @impl true
   @spec list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_accounts(access_token) do
-    make_request(:get, "#{@graph_api_base}/me/adaccounts", params: [access_token: access_token])
+    make_request(:get, "#{@graph_api_base}/me/adaccounts",
+      params: [
+        access_token: access_token,
+        fields: "id,name,currency,timezone_name,account_status"
+      ]
+    )
   end
 
   @impl true
@@ -145,8 +150,17 @@ defmodule AdButler.Meta.Client do
 
         {:ok, %{access_token: token, expires_in: expires_in}}
 
-      {:ok, %{body: body}} ->
-        {:error, {:token_exchange_failed, body}}
+      {:ok, %{body: body}} when is_map(body) ->
+        safe = %{
+          code: get_in(body, ["error", "code"]),
+          type: get_in(body, ["error", "type"]),
+          subcode: get_in(body, ["error", "error_subcode"])
+        }
+
+        {:error, {:token_exchange_failed, safe}}
+
+      {:ok, %{status: status}} ->
+        {:error, {:token_exchange_failed, %{code: nil, type: nil, subcode: nil, status: status}}}
 
       {:error, reason} ->
         {:error, reason}

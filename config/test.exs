@@ -42,7 +42,19 @@ config :phoenix,
 
 config :ad_butler, session_secure_cookie: false
 
+config :ad_butler,
+  session_signing_salt: "test_signing_salt",
+  session_encryption_salt: "test_encrypt_salt"
+
+config :ad_butler, AdButlerWeb.Endpoint, live_view: [signing_salt: "test_lv_salt"]
+
 config :ad_butler, :meta_client, AdButler.Meta.ClientMock
+
+config :ad_butler, :rabbitmq, url: "amqp://guest:guest@localhost:5672"
+
+config :ad_butler, :messaging_publisher, AdButler.Messaging.PublisherMock
+
+config :ad_butler, :broadway_producer, :test
 
 config :ad_butler, Oban, testing: :manual
 

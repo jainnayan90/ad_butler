@@ -18,5 +18,5 @@ citext_ok =
     Ecto.Adapters.SQL.Sandbox.checkin(AdButler.Repo)
   end
 
-excludes = if citext_ok, do: [], else: [:requires_citext]
+excludes = if citext_ok, do: [:integration], else: [:requires_citext, :integration]
 ExUnit.start(exclude: excludes)

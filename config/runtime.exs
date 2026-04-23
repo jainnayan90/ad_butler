@@ -17,6 +17,10 @@ import Config
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 if config_env() == :prod do
+  config :ad_butler, :rabbitmq, url: System.fetch_env!("RABBITMQ_URL")
+end
+
+if config_env() == :prod do
   cloak_key = Base.decode64!(System.fetch_env!("CLOAK_KEY"))
 
   if byte_size(cloak_key) != 32 do
@@ -42,6 +46,11 @@ end
 
 config :ad_butler, AdButlerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+
+if config_env() == :prod do
+  config :ad_butler, AdButlerWeb.Endpoint,
+    live_view: [signing_salt: System.fetch_env!("LIVE_VIEW_SIGNING_SALT")]
+end
 
 if config_env() == :prod do
   # Session cookies use `secure: true` by default (see endpoint.ex :session_secure_cookie).

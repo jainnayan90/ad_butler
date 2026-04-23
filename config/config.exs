@@ -10,13 +10,14 @@ import Config
 config :ad_butler,
   ecto_repos: [AdButler.Repo],
   generators: [timestamp_type: :utc_datetime],
-  trusted_proxy: false
+  trusted_proxy: false,
+  env: config_env()
 
 # Configure the endpoint
-config :ad_butler,
-  session_signing_salt: "yp0B0EBm",
-  session_encryption_salt: "Cfg1C1OwCrAmNkVp"
-
+# Session salts (session_signing_salt, session_encryption_salt) are baked into the release
+# image for prod (compile_env! for the LiveView socket, fetch_env! for the HTTP session plug).
+# They are set per-environment in dev.exs/test.exs. LiveView signing_salt is runtime-only:
+# it is read from LIVE_VIEW_SIGNING_SALT at startup (see runtime.exs).
 config :ad_butler, AdButlerWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -24,8 +25,7 @@ config :ad_butler, AdButlerWeb.Endpoint,
     formats: [html: AdButlerWeb.ErrorHTML, json: AdButlerWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: AdButler.PubSub,
-  live_view: [signing_salt: "27ZZYgxL"]
+  pubsub_server: AdButler.PubSub
 
 # Configure the mailer
 #
@@ -64,7 +64,32 @@ config :tailwind,
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id, :worker, :id, :kind, :reason, :queue, :user_id, :meta_connection_id]
+  metadata: [
+    :request_id,
+    :worker,
+    :id,
+    :kind,
+    :reason,
+    :queue,
+    :user_id,
+    :meta_connection_id,
+    :ad_account_id,
+    :campaigns,
+    :ad_sets,
+    :ads,
+    :count,
+    :meta_id,
+    :connection_count,
+    :replayed,
+    :replayed_so_far,
+    :exchange,
+    :dlq,
+    :delay_ms,
+    :meta_ids,
+    :attempts_left,
+    :limit,
+    :errors
+  ]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
@@ -75,11 +100,15 @@ config :phoenix, :filter_parameters, [
   "client_secret",
   "code",
   "fb_exchange_token",
-  "token"
+  "token",
+  "cloak_key",
+  "signing_salt",
+  "encryption_salt"
 ]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+# sync: 20 concurrency requires POOL_SIZE >= 25 in prod (20 workers + headroom for web/cron)
 config :ad_butler, Oban,
   repo: AdButler.Repo,
   queues: [default: 10, sync: 20, analytics: 5],
@@ -88,7 +117,8 @@ config :ad_butler, Oban,
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     {Oban.Plugins.Cron,
      crontab: [
-       {"0 */6 * * *", AdButler.Workers.TokenRefreshSweepWorker}
+       {"0 */6 * * *", AdButler.Workers.TokenRefreshSweepWorker},
+       {"5 */6 * * *", AdButler.Workers.SyncAllConnectionsWorker}
      ]}
   ]
 

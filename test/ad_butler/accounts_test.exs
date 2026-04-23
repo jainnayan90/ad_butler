@@ -203,6 +203,20 @@ defmodule AdButler.AccountsTest do
     end
   end
 
+  describe "list_all_active_meta_connections/1" do
+    test "respects the row limit and logs an error when limit is hit" do
+      Enum.each(1..3, fn _ -> insert(:meta_connection, status: "active") end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          result = Accounts.list_all_active_meta_connections(2)
+          assert length(result) == 2
+        end)
+
+      assert log =~ "list_all_active_meta_connections hit row limit"
+    end
+  end
+
   describe "list_meta_connections/1" do
     test "returns only active connections for the given user" do
       user = insert(:user)
