@@ -47,54 +47,31 @@ defmodule AdButler.Factory do
     }
   end
 
-  def ad_set_factory(attrs) do
-    campaign = attrs[:campaign]
+  def ad_set_factory do
+    ad_account = build(:ad_account)
+    campaign = build(:campaign, ad_account: ad_account)
 
-    ad_account =
-      attrs[:ad_account] ||
-        case campaign && campaign.ad_account do
-          %Ecto.Association.NotLoaded{} -> build(:ad_account)
-          nil -> build(:ad_account)
-          loaded -> loaded
-        end
-
-    campaign = campaign || build(:campaign, ad_account: ad_account)
-
-    struct(
-      AdSet,
-      %{
-        ad_account: ad_account,
-        campaign: campaign,
-        meta_id: sequence(:ad_set_meta_id, &"adset_#{100 + &1}"),
-        name: sequence(:ad_set_name, &"Ad Set #{&1}"),
-        status: "ACTIVE",
-        raw_jsonb: %{}
-      }
-    )
+    struct!(AdSet, %{
+      ad_account: ad_account,
+      campaign: campaign,
+      meta_id: sequence(:ad_set_meta_id, &"adset_#{100 + &1}"),
+      name: sequence(:ad_set_name, &"Ad Set #{&1}"),
+      status: "ACTIVE",
+      raw_jsonb: %{}
+    })
   end
 
-  def ad_factory(attrs) do
-    ad_set = attrs[:ad_set] || build(:ad_set)
+  def ad_factory do
+    ad_set = build(:ad_set)
 
-    ad_account =
-      attrs[:ad_account] ||
-        case ad_set.ad_account do
-          %Ecto.Association.NotLoaded{} -> build(:ad_account)
-          nil -> build(:ad_account)
-          loaded -> loaded
-        end
-
-    struct(
-      Ad,
-      %{
-        ad_account: ad_account,
-        ad_set: ad_set,
-        meta_id: sequence(:ad_meta_id, &"ad_#{100 + &1}"),
-        name: sequence(:ad_name, &"Ad #{&1}"),
-        status: "ACTIVE",
-        raw_jsonb: %{}
-      }
-    )
+    struct!(Ad, %{
+      ad_account: ad_set.ad_account,
+      ad_set: ad_set,
+      meta_id: sequence(:ad_meta_id, &"ad_#{100 + &1}"),
+      name: sequence(:ad_name, &"Ad #{&1}"),
+      status: "ACTIVE",
+      raw_jsonb: %{}
+    })
   end
 
   def creative_factory do
