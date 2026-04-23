@@ -47,7 +47,7 @@ defmodule AdButler.Workers.FetchAdAccountsWorkerTest do
       end)
 
       assert :ok =
-               perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+               perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
 
       accounts = Ads.list_ad_accounts(user)
       assert length(accounts) == 2
@@ -63,7 +63,7 @@ defmodule AdButler.Workers.FetchAdAccountsWorkerTest do
       end)
 
       assert {:snooze, {15, :minutes}} =
-               perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+               perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
     end
   end
 
@@ -76,7 +76,7 @@ defmodule AdButler.Workers.FetchAdAccountsWorkerTest do
       end)
 
       assert {:cancel, "unauthorized"} =
-               perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+               perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
 
       updated = Accounts.get_meta_connection!(conn.id)
       assert updated.status == "revoked"
@@ -92,14 +92,14 @@ defmodule AdButler.Workers.FetchAdAccountsWorkerTest do
       end)
 
       assert {:error, :meta_server_error} =
-               perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+               perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
     end
   end
 
   describe "perform/1 missing connection" do
     test "cancels job when meta_connection no longer exists" do
       assert {:cancel, "meta_connection_not_found"} =
-               perform_job(FetchAdAccountsWorker, %{meta_connection_id: Ecto.UUID.generate()})
+               perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => Ecto.UUID.generate()})
     end
   end
 
@@ -125,8 +125,8 @@ defmodule AdButler.Workers.FetchAdAccountsWorkerTest do
         :ok
       end)
 
-      perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
-      perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+      perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
+      perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
 
       assert length(Ads.list_ad_accounts(user)) == 1
     end

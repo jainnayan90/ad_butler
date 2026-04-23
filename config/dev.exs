@@ -91,6 +91,8 @@ config :phoenix_live_view,
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
 
+config :ad_butler, :rabbitmq, url: System.get_env("RABBITMQ_URL", "amqp://guest:guest@localhost")
+
 config :ad_butler, session_secure_cookie: false
 
 config :ad_butler,

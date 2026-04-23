@@ -10,22 +10,26 @@ defmodule Mix.Tasks.AdButler.ReplayDlq do
   @exchange "ad_butler.sync.fanout"
   @default_limit 100
 
-  @spec run(list()) :: :ok
+  @spec run(list()) :: :ok | {:error, term()}
   def run(args) do
     Mix.Task.run("app.start")
     limit = parse_limit(args)
 
-    {:ok, conn} = AMQP.Connection.open(rabbitmq_url())
-    {:ok, channel} = AMQP.Channel.open(conn)
+    with {:ok, conn} <- AMQP.Connection.open(rabbitmq_url()),
+         {:ok, channel} <- AMQP.Channel.open(conn) do
+      replayed = drain_dlq(channel, limit, 0)
 
-    replayed = drain_dlq(channel, limit, 0)
+      Logger.info("DLQ replay complete", replayed: replayed)
+      Mix.shell().info("Replayed #{replayed} message(s) from DLQ to main queue.")
 
-    Logger.info("DLQ replay complete", replayed: replayed)
-    Mix.shell().info("Replayed #{replayed} message(s) from DLQ to main queue.")
-
-    AMQP.Channel.close(channel)
-    AMQP.Connection.close(conn)
-    :ok
+      AMQP.Channel.close(channel)
+      AMQP.Connection.close(conn)
+      :ok
+    else
+      {:error, reason} ->
+        Mix.shell().error("Failed to connect to RabbitMQ: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   @doc false

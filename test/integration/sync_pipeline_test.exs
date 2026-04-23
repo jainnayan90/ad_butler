@@ -41,7 +41,7 @@ defmodule AdButler.Integration.SyncPipelineTest do
 
     # Step 1: Run FetchAdAccountsWorker via Oban.Testing (no Process.sleep)
     assert :ok =
-             perform_job(FetchAdAccountsWorker, %{meta_connection_id: conn.id})
+             perform_job(FetchAdAccountsWorker, %{"meta_connection_id" => conn.id})
 
     # Step 2: Assert ad account upserted
     accounts = Ads.list_ad_accounts(user)

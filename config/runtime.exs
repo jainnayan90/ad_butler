@@ -16,7 +16,7 @@ import Config
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
-if config_env() in [:prod, :dev] do
+if config_env() == :prod do
   config :ad_butler, :rabbitmq, url: System.fetch_env!("RABBITMQ_URL")
 end
 
