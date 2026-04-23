@@ -10,7 +10,7 @@
 
 ## Scoping Assessment (mix.exs)
 
-- `:credo`, `:dialyxir` scoped to `only: [:dev, :test]` / `only: :dev` ✓
+- `:credo` scoped to `only: [:dev, :test]` ✓ (`:dialyxir` not present in mix.exs)
 - `:mox`, `:ex_machina`, `:lazy_html` scoped to `only: :test` / `only: [:test, :dev]` ✓
 - `:tidewave`, `:phoenix_live_reload`, `:esbuild`, `:tailwind` scoped to `only: :dev` ✓
 - `:broadway_rabbitmq` not scoped — correct, needed in all envs ✓

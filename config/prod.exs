@@ -8,7 +8,8 @@ import Config
 config :ad_butler, AdButlerWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
 # Session salts are read at compile time (endpoint.ex uses compile_env!). They must be
-# injected as build ARGs (e.g. fly secrets set --stage). Rotation requires recompile + restart.
+# present as env vars during the Docker build (injected via BuildKit secret mounts —
+# see the RUN --mount=type=secret lines in Dockerfile). Rotation requires recompile + restart.
 fetch_salt = fn name ->
   case System.get_env(name) do
     nil -> raise "environment variable #{name} is missing"

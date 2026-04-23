@@ -23,8 +23,8 @@ COPY rel rel
 
 RUN --mount=type=secret,id=SESSION_SIGNING_SALT \
     --mount=type=secret,id=SESSION_ENCRYPTION_SALT \
-    SESSION_SIGNING_SALT=$(cat /run/secrets/SESSION_SIGNING_SALT) \
-    SESSION_ENCRYPTION_SALT=$(cat /run/secrets/SESSION_ENCRYPTION_SALT) \
+    export SESSION_SIGNING_SALT=$(cat /run/secrets/SESSION_SIGNING_SALT) && \
+    export SESSION_ENCRYPTION_SALT=$(cat /run/secrets/SESSION_ENCRYPTION_SALT) && \
     mix assets.deploy && mix compile && mix release
 
 # Runtime stage
