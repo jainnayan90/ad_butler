@@ -64,9 +64,18 @@ defmodule AdButler.Sync.MetadataPipeline do
     client = meta_client()
 
     with {:ok, campaigns} <-
-           client.list_campaigns(ad_account.meta_id, connection.access_token, []),
-         {:ok, ad_sets} <- client.list_ad_sets(ad_account.meta_id, connection.access_token, []),
-         {:ok, ads} <- client.list_ads(ad_account.meta_id, connection.access_token, []) do
+           client.list_campaigns(ad_account.meta_id, connection.access_token,
+             fields: "id,name,status,objective,daily_budget,lifetime_budget"
+           ),
+         {:ok, ad_sets} <-
+           client.list_ad_sets(ad_account.meta_id, connection.access_token,
+             fields:
+               "id,name,status,campaign_id,daily_budget,lifetime_budget,bid_amount,targeting"
+           ),
+         {:ok, ads} <-
+           client.list_ads(ad_account.meta_id, connection.access_token,
+             fields: "id,name,status,adset_id"
+           ) do
       campaign_id_map = upsert_campaigns(ad_account, campaigns)
       ad_set_id_map = upsert_ad_sets(ad_account, ad_sets, campaign_id_map)
       attrs_list = Enum.map(ads, &build_ad_attrs(&1, ad_set_id_map))

@@ -11,7 +11,12 @@ defmodule AdButler.Meta.Client do
   @impl true
   @spec list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_accounts(access_token) do
-    make_request(:get, "#{@graph_api_base}/me/adaccounts", params: [access_token: access_token])
+    make_request(:get, "#{@graph_api_base}/me/adaccounts",
+      params: [
+        access_token: access_token,
+        fields: "id,name,currency,timezone_name,account_status"
+      ]
+    )
   end
 
   @impl true

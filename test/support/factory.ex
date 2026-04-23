@@ -47,10 +47,15 @@ defmodule AdButler.Factory do
     }
   end
 
+  # ExMachina note: ad_account is shared so the default graph is internally consistent.
+  # Overriding only ad_account: (without campaign:) will diverge campaign.ad_account_id —
+  # callers that need full consistency must pass both associations explicitly.
   def ad_set_factory do
+    ad_account = build(:ad_account)
+
     %AdSet{
-      ad_account: build(:ad_account),
-      campaign: build(:campaign),
+      ad_account: ad_account,
+      campaign: build(:campaign, ad_account: ad_account),
       meta_id: sequence(:ad_set_meta_id, &"adset_#{100 + &1}"),
       name: sequence(:ad_set_name, &"Ad Set #{&1}"),
       status: "ACTIVE",
@@ -59,9 +64,11 @@ defmodule AdButler.Factory do
   end
 
   def ad_factory do
+    ad_set = build(:ad_set)
+
     %Ad{
-      ad_account: build(:ad_account),
-      ad_set: build(:ad_set),
+      ad_account: ad_set.ad_account,
+      ad_set: ad_set,
       meta_id: sequence(:ad_meta_id, &"ad_#{100 + &1}"),
       name: sequence(:ad_name, &"Ad #{&1}"),
       status: "ACTIVE",
