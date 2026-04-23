@@ -1,4 +1,14 @@
 defmodule AdButlerWeb.Endpoint do
+  @moduledoc """
+  Phoenix endpoint for AdButlerWeb.
+
+  Configures static file serving, LiveView socket, session management, and the
+  plug pipeline. Session salts are read from `Application` env on every request
+  (`fetch_env!`) so runtime config updates take effect without a restart. See
+  inline comments for the distinction between `@session_options` (compile-time,
+  used only by LiveView connect_info) and the `session/2` plug (runtime).
+  """
+
   use Phoenix.Endpoint, otp_app: :ad_butler
 
   # @session_options is frozen at compile time (compile_env!) and used only for the

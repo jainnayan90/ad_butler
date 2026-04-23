@@ -1,4 +1,15 @@
 defmodule AdButlerWeb.Router do
+  @moduledoc """
+  Phoenix router for AdButlerWeb.
+
+  Pipelines:
+  - `:browser` — HTML requests with CSRF, session, and a strict CSP header.
+  - `:authenticated` — requires a valid session via `RequireAuthenticated`.
+  - `:rate_limited` — applies `PlugAttack` throttling (OAuth routes).
+  - `:health_check` — intentionally empty; see inline comment for why PlugAttack
+    is excluded here.
+  """
+
   use AdButlerWeb, :router
 
   pipeline :browser do

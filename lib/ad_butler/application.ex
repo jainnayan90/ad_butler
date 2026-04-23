@@ -1,7 +1,12 @@
 defmodule AdButler.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  OTP Application entry point for AdButler.
+
+  Starts the supervision tree: database, vault, PubSub, rate-limit store, Oban,
+  and — outside of test — the RabbitMQ publisher and Broadway metadata pipeline.
+  Also attaches a telemetry handler that logs discarded and cancelled Oban jobs
+  and any job exceptions.
+  """
 
   use Application
 
@@ -36,7 +41,7 @@ defmodule AdButler.Application do
       ] ++
         if env != :test do
           [
-            AdButler.Messaging.Publisher,
+            AdButler.Messaging.PublisherPool,
             AdButler.Sync.MetadataPipeline
           ]
         else
@@ -87,6 +92,7 @@ defmodule AdButler.Application do
     end
   end
 
+  @doc "Telemetry handler for Oban job lifecycle events. Logs discarded, cancelled, and exception events."
   def handle_oban_event(
         [:oban, :job, :stop],
         _measurements,

@@ -8,6 +8,7 @@ defmodule AdButlerWeb.AuthControllerTest do
   alias AdButler.Meta.ClientMock
   alias AdButler.Repo
 
+  setup :set_mox_global
   setup :verify_on_exit!
 
   describe "GET /auth/meta" do
@@ -167,6 +168,21 @@ defmodule AdButlerWeb.AuthControllerTest do
 
       assert redirected_to(conn) == ~p"/"
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "User denied access"
+    end
+
+    test "truncates error_description longer than 200 chars in flash", %{conn: conn} do
+      long_description = String.duplicate("x", 500)
+
+      conn =
+        get(conn, ~p"/auth/meta/callback", %{
+          "error" => "access_denied",
+          "error_description" => long_description
+        })
+
+      assert redirected_to(conn) == ~p"/"
+      flash_error = Phoenix.Flash.get(conn.assigns.flash, :error)
+      # "OAuth error: " prefix (13 chars) + 200-char body = 213 max
+      assert String.length(flash_error) <= 215
     end
   end
 

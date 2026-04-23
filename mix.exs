@@ -104,7 +104,13 @@ defmodule AdButler.MixProject do
         "esbuild theme --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "hex.audit",
+        "test"
+      ]
     ]
   end
 end

@@ -1,5 +1,11 @@
 defmodule AdButler.Ads.Ad do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta ad, the leaf node of the campaign hierarchy.
+
+  Belongs to an `AdAccount` and an `AdSet`. The `creative_id` association is
+  nullable because Meta may delete a creative while the ad record persists
+  (`on_delete: :nilify_all`). Raw API payload is preserved in `raw_jsonb`.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -23,6 +29,10 @@ defmodule AdButler.Ads.Ad do
   @required [:ad_account_id, :ad_set_id, :meta_id, :name, :status]
   @optional [:creative_id, :raw_jsonb]
 
+  @doc "Returns the list of required field names for bulk-filtering."
+  def required_fields, do: @required
+
+  @doc "Builds a changeset for an ad. Validates required fields and the `(ad_account_id, meta_id)` uniqueness constraint."
   def changeset(ad, attrs) do
     ad
     |> cast(attrs, @required ++ @optional)

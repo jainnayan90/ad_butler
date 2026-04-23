@@ -1,11 +1,17 @@
 defmodule AdButler.Ads do
-  @moduledoc false
+  @moduledoc """
+  Context for ad data — ad accounts, campaigns, ad sets, ads, and creatives.
+
+  All user-facing queries are scoped to the requesting user's `MetaConnection` IDs so
+  one user can never access another's data. Bulk upsert functions bypass changeset
+  validation for performance; callers are responsible for valid attrs.
+  """
   import Ecto.Query
 
   require Logger
 
   alias AdButler.Accounts
-  alias AdButler.Accounts.{MetaConnection, User}
+  alias AdButler.Accounts.User
   alias AdButler.Ads.{Ad, AdAccount, AdSet, Campaign, Creative}
   alias AdButler.Repo
 
@@ -34,6 +40,7 @@ defmodule AdButler.Ads do
   # AdAccount
   # ---------------------------------------------------------------------------
 
+  @doc "Returns all `AdAccount` records accessible to `user`."
   @spec list_ad_accounts(User.t()) :: [AdAccount.t()]
   def list_ad_accounts(%User{} = user) do
     AdAccount
@@ -41,6 +48,7 @@ defmodule AdButler.Ads do
     |> Repo.all()
   end
 
+  @doc "Returns the `AdAccount` with `id` scoped to `user`. Raises if not found or not owned."
   @spec get_ad_account!(User.t(), binary()) :: AdAccount.t()
   def get_ad_account!(%User{} = user, id) do
     AdAccount
@@ -52,14 +60,16 @@ defmodule AdButler.Ads do
   @spec unsafe_get_ad_account_for_sync(binary()) :: AdAccount.t() | nil
   def unsafe_get_ad_account_for_sync(id), do: Repo.get(AdAccount, id)
 
+  @doc "Returns the `AdAccount` matching `(meta_connection_id, meta_id)`, or `nil`."
   @spec get_ad_account_by_meta_id(binary(), binary()) :: AdAccount.t() | nil
   def get_ad_account_by_meta_id(meta_connection_id, meta_id) do
     Repo.get_by(AdAccount, meta_connection_id: meta_connection_id, meta_id: meta_id)
   end
 
-  @spec upsert_ad_account(MetaConnection.t(), map()) ::
+  @doc "Inserts or updates an `AdAccount` for `connection`, keyed on `(meta_connection_id, meta_id)`."
+  @spec upsert_ad_account(AdButler.Accounts.MetaConnection.t(), map()) ::
           {:ok, AdAccount.t()} | {:error, Ecto.Changeset.t()}
-  def upsert_ad_account(%MetaConnection{} = connection, attrs) do
+  def upsert_ad_account(%AdButler.Accounts.MetaConnection{} = connection, attrs) do
     %AdAccount{meta_connection_id: connection.id}
     |> AdAccount.changeset(attrs)
     |> Repo.insert(
@@ -89,7 +99,7 @@ defmodule AdButler.Ads do
         |> Map.put(:updated_at, now)
       end)
 
-    entries = bulk_validate(entries, Campaign)
+    entries = bulk_strip_and_filter(entries, Campaign)
 
     Repo.insert_all(
       Campaign,
@@ -124,7 +134,7 @@ defmodule AdButler.Ads do
         |> Map.put(:updated_at, now)
       end)
 
-    entries = bulk_validate(entries, AdSet)
+    entries = bulk_strip_and_filter(entries, AdSet)
 
     Repo.insert_all(
       AdSet,
@@ -146,6 +156,7 @@ defmodule AdButler.Ads do
     )
   end
 
+  @doc "Returns campaigns accessible to `user`. Supports `:ad_account_id` and `:status` filters."
   @spec list_campaigns(User.t(), keyword()) :: [Campaign.t()]
   def list_campaigns(%User{} = user, opts \\ []) do
     Campaign
@@ -154,6 +165,7 @@ defmodule AdButler.Ads do
     |> Repo.all()
   end
 
+  @doc "Returns the campaign with `id` scoped to `user`. Raises if not found or not owned."
   @spec get_campaign!(User.t(), binary()) :: Campaign.t()
   def get_campaign!(%User{} = user, id) do
     Campaign
@@ -161,6 +173,7 @@ defmodule AdButler.Ads do
     |> Repo.get!(id)
   end
 
+  @doc "Inserts or updates a campaign for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_campaign(AdAccount.t(), map()) ::
           {:ok, Campaign.t()} | {:error, Ecto.Changeset.t()}
   def upsert_campaign(%AdAccount{} = ad_account, attrs) do
@@ -195,6 +208,7 @@ defmodule AdButler.Ads do
   # AdSet
   # ---------------------------------------------------------------------------
 
+  @doc "Returns ad sets accessible to `user`. Supports `:ad_account_id` and `:campaign_id` filters."
   @spec list_ad_sets(User.t(), keyword()) :: [AdSet.t()]
   def list_ad_sets(%User{} = user, opts \\ []) do
     AdSet
@@ -203,6 +217,7 @@ defmodule AdButler.Ads do
     |> Repo.all()
   end
 
+  @doc "Returns the ad set with `id` scoped to `user`. Raises if not found or not owned."
   @spec get_ad_set!(User.t(), binary()) :: AdSet.t()
   def get_ad_set!(%User{} = user, id) do
     AdSet
@@ -210,6 +225,7 @@ defmodule AdButler.Ads do
     |> Repo.get!(id)
   end
 
+  @doc "Inserts or updates an ad set for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_ad_set(AdAccount.t(), map()) ::
           {:ok, AdSet.t()} | {:error, Ecto.Changeset.t()}
   def upsert_ad_set(%AdAccount{} = ad_account, attrs) do
@@ -245,6 +261,7 @@ defmodule AdButler.Ads do
   # Ad
   # ---------------------------------------------------------------------------
 
+  @doc "Returns ads accessible to `user`. Supports `:ad_account_id` and `:ad_set_id` filters."
   @spec list_ads(User.t(), keyword()) :: [Ad.t()]
   def list_ads(%User{} = user, opts \\ []) do
     Ad
@@ -253,6 +270,7 @@ defmodule AdButler.Ads do
     |> Repo.all()
   end
 
+  @doc "Returns the ad with `id` scoped to `user`. Raises if not found or not owned."
   @spec get_ad!(User.t(), binary()) :: Ad.t()
   def get_ad!(%User{} = user, id) do
     Ad
@@ -260,6 +278,7 @@ defmodule AdButler.Ads do
     |> Repo.get!(id)
   end
 
+  @doc "Inserts or updates an ad for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_ad(AdAccount.t(), map()) ::
           {:ok, Ad.t()} | {:error, Ecto.Changeset.t()}
   def upsert_ad(%AdAccount{} = ad_account, attrs) do
@@ -286,7 +305,7 @@ defmodule AdButler.Ads do
         |> Map.put(:updated_at, now)
       end)
 
-    entries = bulk_validate(entries, Ad)
+    entries = bulk_strip_and_filter(entries, Ad)
 
     Repo.insert_all(
       Ad,
@@ -305,19 +324,20 @@ defmodule AdButler.Ads do
     end)
   end
 
-  defp bulk_validate(attrs_list, schema_mod) do
+  defp bulk_strip_and_filter(attrs_list, schema_mod) do
     known_fields = schema_mod.__schema__(:fields)
+    required = schema_mod.required_fields()
 
-    {valid, invalid} =
+    {valid, dropped} =
       Enum.split_with(attrs_list, fn attrs ->
-        schema_mod.changeset(struct(schema_mod), attrs).valid?
+        Enum.all?(required, &(not is_nil(Map.get(attrs, &1))))
       end)
 
-    if invalid != [] do
-      meta_ids = Enum.map(invalid, & &1[:meta_id])
+    if dropped != [] do
+      meta_ids = Enum.map(dropped, & &1[:meta_id])
 
-      Logger.warning("bulk_validate: dropped invalid rows",
-        count: length(invalid),
+      Logger.warning("bulk_strip_and_filter: dropped rows missing required fields",
+        count: length(dropped),
         meta_ids: meta_ids
       )
     end
@@ -329,6 +349,7 @@ defmodule AdButler.Ads do
   # Creative
   # ---------------------------------------------------------------------------
 
+  @doc "Inserts or updates a creative for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_creative(AdAccount.t(), map()) ::
           {:ok, Creative.t()} | {:error, Ecto.Changeset.t()}
   def upsert_creative(%AdAccount{} = ad_account, attrs) do

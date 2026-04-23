@@ -1,5 +1,11 @@
 defmodule AdButler.Accounts do
-  @moduledoc false
+  @moduledoc """
+  Context for managing users and their Meta (Facebook) OAuth connections.
+
+  Handles user creation/lookup, Meta token exchange, and `MetaConnection` lifecycle
+  (create, update, expiry queries). All queries that touch ad data are scoped through
+  `MetaConnection` IDs owned by the requesting user.
+  """
   import Ecto.Query
   require Logger
 
@@ -7,6 +13,11 @@ defmodule AdButler.Accounts do
   alias AdButler.Meta.Client
   alias AdButler.Repo
 
+  @doc """
+  Exchanges a Meta OAuth `code` for a long-lived token, upserts the user, and
+  creates or updates their `MetaConnection`. Returns `{:ok, user, connection}` on
+  success or `{:error, reason}` if the token exchange or any DB step fails.
+  """
   @spec authenticate_via_meta(String.t()) ::
           {:ok, User.t(), MetaConnection.t()} | {:error, term()}
   def authenticate_via_meta(code) do
@@ -35,15 +46,22 @@ defmodule AdButler.Accounts do
     end
   end
 
+  @doc "Returns the user with the given `id`, or `nil` if not found."
   @spec get_user(binary()) :: User.t() | nil
   def get_user(id), do: Repo.get(User, id)
 
+  @doc "Returns the user with the given `id`. Raises if not found."
   @spec get_user!(binary()) :: User.t()
   def get_user!(id), do: Repo.get!(User, id)
 
+  @doc "Returns the user with the given `email`, or `nil` if not found."
   @spec get_user_by_email(String.t()) :: User.t() | nil
   def get_user_by_email(email), do: Repo.get_by(User, email: email)
 
+  @doc """
+  Inserts or updates a user keyed on `meta_user_id`. Updates `name`, `email`, and
+  `updated_at` on conflict so repeated OAuth logins keep the record fresh.
+  """
   @spec create_or_update_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def create_or_update_user(attrs) do
     %User{}
@@ -55,12 +73,27 @@ defmodule AdButler.Accounts do
     )
   end
 
+  @doc "Returns the `MetaConnection` with the given `id`. Raises if not found."
   @spec get_meta_connection!(binary()) :: MetaConnection.t()
   def get_meta_connection!(id), do: Repo.get!(MetaConnection, id)
 
+  @doc "Returns all `MetaConnection` records whose IDs are in `ids` as a map keyed by id."
+  @spec get_meta_connections_by_ids([binary()]) :: %{binary() => MetaConnection.t()}
+  def get_meta_connections_by_ids(ids) when is_list(ids) do
+    MetaConnection
+    |> where([mc], mc.id in ^ids)
+    |> Repo.all()
+    |> Map.new(&{&1.id, &1})
+  end
+
+  @doc "Returns the `MetaConnection` with the given `id`, or `nil` if not found."
   @spec get_meta_connection(binary()) :: MetaConnection.t() | nil
   def get_meta_connection(id), do: Repo.get(MetaConnection, id)
 
+  @doc """
+  Inserts or updates a `MetaConnection` for `user`, keyed on `(user_id, meta_user_id)`.
+  Updates `access_token`, `token_expires_at`, `scopes`, and `updated_at` on conflict.
+  """
   @spec create_meta_connection(User.t(), map()) ::
           {:ok, MetaConnection.t()} | {:error, Ecto.Changeset.t()}
   def create_meta_connection(user, attrs) do
@@ -73,6 +106,7 @@ defmodule AdButler.Accounts do
     )
   end
 
+  @doc "Updates an existing `MetaConnection` with `attrs`."
   @spec update_meta_connection(MetaConnection.t(), map()) ::
           {:ok, MetaConnection.t()} | {:error, Ecto.Changeset.t()}
   def update_meta_connection(connection, attrs) do
@@ -81,7 +115,14 @@ defmodule AdButler.Accounts do
     |> Repo.update()
   end
 
-  # Safety cap — for >1000 connections, replace with cursor-based batching.
+  @doc """
+  Returns all active `MetaConnection` records up to `limit` (default 1000).
+  Logs an error and truncates if the cap is hit.
+
+  **Not for production sweep use** — capped at 1000 rows. Use
+  `stream_active_meta_connections/1` for sweeps over large datasets.
+  """
+  # Safety cap — use stream_active_meta_connections/1 for production sweeps.
   @spec list_all_active_meta_connections(pos_integer()) :: [MetaConnection.t()]
   def list_all_active_meta_connections(limit \\ 1000) do
     rows =
@@ -101,6 +142,27 @@ defmodule AdButler.Accounts do
     end
   end
 
+  @doc """
+  Streams all active `MetaConnection` records in pages of `chunk_size` (default 500).
+  Must be called inside a transaction. Use this for production sweeps over large datasets
+  instead of `list_all_active_meta_connections/1`.
+
+  ## Example
+
+      Repo.transaction(fn ->
+        stream_active_meta_connections()
+        |> Stream.chunk_every(200)
+        |> Enum.each(&enqueue_jobs/1)
+      end)
+  """
+  @spec stream_active_meta_connections(pos_integer()) :: Enum.t()
+  def stream_active_meta_connections(chunk_size \\ 500) do
+    MetaConnection
+    |> where([mc], mc.status == "active")
+    |> Repo.stream(max_rows: chunk_size)
+  end
+
+  @doc "Returns the IDs of all active `MetaConnection` records belonging to `user`."
   @spec list_meta_connection_ids_for_user(User.t()) :: [binary()]
   def list_meta_connection_ids_for_user(%User{id: user_id}) do
     MetaConnection
@@ -109,6 +171,7 @@ defmodule AdButler.Accounts do
     |> Repo.all()
   end
 
+  @doc "Returns all active `MetaConnection` records belonging to `user`."
   @spec list_meta_connections(User.t()) :: [MetaConnection.t()]
   def list_meta_connections(user) do
     MetaConnection
@@ -116,8 +179,13 @@ defmodule AdButler.Accounts do
     |> Repo.all()
   end
 
+  @doc """
+  Returns active connections whose tokens expire within `days_ahead` days,
+  ordered by soonest expiry, up to `limit` rows. Used by
+  `TokenRefreshSweepWorker` to find connections that need proactive refreshing.
+  """
   @spec list_expiring_meta_connections(pos_integer(), pos_integer()) :: [MetaConnection.t()]
-  def list_expiring_meta_connections(days_ahead \\ 70, limit \\ 500) do
+  def list_expiring_meta_connections(days_ahead \\ 14, limit \\ 500) do
     threshold = DateTime.add(DateTime.utc_now(), days_ahead * 86_400, :second)
 
     MetaConnection

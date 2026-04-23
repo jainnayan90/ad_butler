@@ -1,5 +1,11 @@
 defmodule AdButler.Ads.AdAccount do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta ad account linked to a `MetaConnection`.
+
+  One connection may have multiple ad accounts. `last_synced_at` tracks when the
+  full metadata sync last completed for this account. Raw API payload is preserved
+  in `raw_jsonb` for fields not mapped to explicit columns.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -28,6 +34,7 @@ defmodule AdButler.Ads.AdAccount do
   @required [:meta_connection_id, :meta_id, :name, :currency, :timezone_name, :status]
   @optional [:last_synced_at, :raw_jsonb]
 
+  @doc "Builds a changeset for an ad account. Validates required fields and the `(meta_connection_id, meta_id)` uniqueness constraint."
   def changeset(ad_account, attrs) do
     ad_account
     |> cast(attrs, @required ++ @optional)

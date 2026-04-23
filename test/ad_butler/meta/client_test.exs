@@ -141,6 +141,152 @@ defmodule AdButler.Meta.ClientTest do
     end
   end
 
+  describe "list_campaigns/3" do
+    test "200 with data returns {:ok, list}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "camp_1", "name" => "Campaign 1"}]})
+      end)
+
+      assert {:ok, [%{"id" => "camp_1"}]} = Client.list_campaigns("act_123", "token")
+    end
+
+    test "200 without data key returns {:ok, body}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{})
+      end)
+
+      assert {:ok, %{}} = Client.list_campaigns("act_123", "token")
+    end
+
+    test "401 returns {:error, :unauthorized}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 401}, %{"error" => %{"message" => "Invalid token"}})
+      end)
+
+      assert {:error, :unauthorized} = Client.list_campaigns("act_123", "bad_token")
+    end
+
+    test "429 returns {:error, :rate_limit_exceeded}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 429}, %{"error" => %{"message" => "Rate limit"}})
+      end)
+
+      assert {:error, :rate_limit_exceeded} = Client.list_campaigns("act_123", "token")
+    end
+
+    test "500 returns {:error, :meta_server_error}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 500}, %{"error" => %{"message" => "Server error"}})
+      end)
+
+      assert {:error, :meta_server_error} = Client.list_campaigns("act_123", "token")
+    end
+  end
+
+  describe "list_ad_sets/3" do
+    test "200 returns {:ok, list}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "adset_1"}]})
+      end)
+
+      assert {:ok, [%{"id" => "adset_1"}]} = Client.list_ad_sets("act_123", "token")
+    end
+
+    test "401 returns {:error, :unauthorized}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 401}, %{"error" => %{"message" => "Invalid token"}})
+      end)
+
+      assert {:error, :unauthorized} = Client.list_ad_sets("act_123", "bad_token")
+    end
+
+    test "429 returns {:error, :rate_limit_exceeded}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 429}, %{"error" => %{"message" => "Rate limit"}})
+      end)
+
+      assert {:error, :rate_limit_exceeded} = Client.list_ad_sets("act_123", "token")
+    end
+  end
+
+  describe "list_ads/3" do
+    test "200 returns {:ok, list}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "ad_1"}]})
+      end)
+
+      assert {:ok, [%{"id" => "ad_1"}]} = Client.list_ads("act_123", "token")
+    end
+
+    test "401 returns {:error, :unauthorized}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 401}, %{"error" => %{"message" => "Invalid token"}})
+      end)
+
+      assert {:error, :unauthorized} = Client.list_ads("act_123", "bad_token")
+    end
+
+    test "429 returns {:error, :rate_limit_exceeded}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 429}, %{"error" => %{"message" => "Rate limit"}})
+      end)
+
+      assert {:error, :rate_limit_exceeded} = Client.list_ads("act_123", "token")
+    end
+  end
+
+  describe "refresh_token/1" do
+    test "200 success returns {:ok, body}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"access_token" => "new_token", "expires_in" => 5_000_000})
+      end)
+
+      assert {:ok, %{"access_token" => "new_token"}} = Client.refresh_token("old_token")
+    end
+
+    test "401 revoked returns {:error, :unauthorized}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 401}, %{"error" => %{"message" => "Revoked token"}})
+      end)
+
+      assert {:error, :unauthorized} = Client.refresh_token("revoked_token")
+    end
+
+    test "server error returns {:error, :meta_server_error}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 503}, %{"error" => %{"message" => "Service unavailable"}})
+      end)
+
+      assert {:error, :meta_server_error} = Client.refresh_token("token")
+    end
+  end
+
+  describe "get_creative/2" do
+    test "200 returns {:ok, body}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{"id" => "creative_1", "name" => "My Creative"})
+      end)
+
+      assert {:ok, %{"id" => "creative_1"}} = Client.get_creative("creative_1", "token")
+    end
+
+    test "404 returns {:error, :unknown_error}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 404}, %{"error" => %{"message" => "Not found"}})
+      end)
+
+      assert {:error, :unknown_error} = Client.get_creative("missing_id", "token")
+    end
+
+    test "non-200 error returns {:error, term}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(%{conn | status: 503}, %{"error" => %{"message" => "Service unavailable"}})
+      end)
+
+      assert {:error, :meta_server_error} = Client.get_creative("creative_1", "token")
+    end
+  end
+
   describe "error handling" do
     test "401 returns {:error, :unauthorized}" do
       Req.Test.stub(AdButler.Meta.Client, fn conn ->

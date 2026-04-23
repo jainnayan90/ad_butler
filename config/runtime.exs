@@ -17,7 +17,18 @@ import Config
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 if config_env() == :prod do
-  config :ad_butler, :rabbitmq, url: System.fetch_env!("RABBITMQ_URL")
+  rabbitmq_pool_size =
+    case Integer.parse(System.get_env("RABBITMQ_POOL_SIZE", "5")) do
+      {n, ""} when n > 0 ->
+        n
+
+      _ ->
+        raise "RABBITMQ_POOL_SIZE must be a positive integer, got: #{System.get_env("RABBITMQ_POOL_SIZE")}"
+    end
+
+  config :ad_butler, :rabbitmq,
+    url: System.fetch_env!("RABBITMQ_URL"),
+    pool_size: rabbitmq_pool_size
 end
 
 if config_env() == :prod do

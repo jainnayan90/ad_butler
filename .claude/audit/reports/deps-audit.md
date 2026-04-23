@@ -1,6 +1,6 @@
-# Dependency Audit
+# Dependency Audit — 2026-04-23
 
-**Score: 95/100**
+**Score: 82/100**
 
 ## Results
 

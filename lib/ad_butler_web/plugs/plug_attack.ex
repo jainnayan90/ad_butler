@@ -1,5 +1,15 @@
 defmodule AdButlerWeb.PlugAttack do
-  @moduledoc false
+  @moduledoc """
+  PlugAttack rate-limiting rules for the AdButler web application.
+
+  Two rules are defined:
+  - **oauth rate limit** — 10 req/60 s per (client IP, path) on all non-health routes.
+  - **health rate limit** — 60 req/60 s per IP on `/health/*` (currently not wired
+    into the `:health_check` pipeline to avoid Fly shared-IP prober restart loops).
+
+  Client IP resolution respects the `fly-client-ip` header when
+  `config :ad_butler, trusted_proxy: :fly` is set.
+  """
   use PlugAttack
 
   # 10 requests per 60 seconds per (client IP, route) on OAuth routes.

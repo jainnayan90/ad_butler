@@ -1,5 +1,11 @@
 defmodule AdButler.Ads.AdSet do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta ad set within a campaign.
+
+  Budget fields (`daily_budget_cents`, `lifetime_budget_cents`, `bid_amount_cents`)
+  store amounts in cents as returned by the Meta API. `targeting_jsonb` holds the
+  raw targeting spec; `raw_jsonb` preserves the full API response.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -31,6 +37,10 @@ defmodule AdButler.Ads.AdSet do
     :raw_jsonb
   ]
 
+  @doc "Returns the list of required field names for bulk-filtering."
+  def required_fields, do: @required
+
+  @doc "Builds a changeset for an ad set. Validates required fields and the `(ad_account_id, meta_id)` uniqueness constraint."
   def changeset(ad_set, attrs) do
     ad_set
     |> cast(attrs, @required ++ @optional)

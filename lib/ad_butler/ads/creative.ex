@@ -1,5 +1,12 @@
 defmodule AdButler.Ads.Creative do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta ad creative belonging to an ad account.
+
+  `asset_specs_jsonb` holds the structured creative spec (images, videos, copy).
+  `raw_jsonb` preserves the full API payload. Creatives are nilified on ads
+  (`on_delete: :nilify_all`) rather than cascading so ad records survive creative
+  deletion.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -20,6 +27,7 @@ defmodule AdButler.Ads.Creative do
   @required [:ad_account_id, :meta_id]
   @optional [:name, :asset_specs_jsonb, :raw_jsonb]
 
+  @doc "Builds a changeset for a creative. Validates required fields and the `(ad_account_id, meta_id)` uniqueness constraint."
   def changeset(creative, attrs) do
     creative
     |> cast(attrs, @required ++ @optional)

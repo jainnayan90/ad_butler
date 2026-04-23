@@ -1,5 +1,12 @@
 defmodule AdButler.Meta.Client do
-  @moduledoc false
+  @moduledoc """
+  HTTP client for the Meta (Facebook) Graph API v19.0.
+
+  Implements `AdButler.Meta.ClientBehaviour` so the module can be swapped out
+  with a mock in tests via `Application.put_env(:ad_butler, :meta_client, ...)`.
+  Rate-limit usage per ad account is tracked in an ETS table managed by
+  `AdButler.Meta.RateLimitStore` and is readable via `get_rate_limit_usage/1`.
+  """
   @behaviour AdButler.Meta.ClientBehaviour
 
   require Logger
@@ -100,9 +107,9 @@ defmodule AdButler.Meta.Client do
     case Req.request(
            req_options() ++
              [
-               method: :get,
+               method: :post,
                url: "#{@graph_api_base}/oauth/access_token",
-               params: [
+               form: [
                  grant_type: "fb_exchange_token",
                  client_id: app_id,
                  client_secret: app_secret,

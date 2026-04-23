@@ -1,5 +1,12 @@
 defmodule AdButler.Workers.TokenRefreshWorker do
-  @moduledoc false
+  @moduledoc """
+  Oban worker that refreshes a single Meta long-lived access token.
+
+  Scheduled automatically by `schedule_refresh/2` after each successful refresh.
+  On revocation or permanent auth failure the job is cancelled and the connection
+  status is updated to `revoked`. Rate-limit errors snooze for 1 hour; the sweep
+  worker (`TokenRefreshSweepWorker`) acts as a safety net for missed refreshes.
+  """
   use Oban.Worker,
     queue: :default,
     max_attempts: 5,
@@ -31,6 +38,7 @@ defmodule AdButler.Workers.TokenRefreshWorker do
   @impl Oban.Worker
   def timeout(_job), do: :timer.seconds(60)
 
+  @doc "Schedules a token refresh job for `conn` to run in `days` days."
   @spec schedule_refresh(MetaConnection.t(), pos_integer()) ::
           {:ok, Oban.Job.t()} | {:error, term()}
   def schedule_refresh(%MetaConnection{} = conn, days) do

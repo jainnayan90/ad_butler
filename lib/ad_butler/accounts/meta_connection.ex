@@ -1,5 +1,11 @@
 defmodule AdButler.Accounts.MetaConnection do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta (Facebook) OAuth connection belonging to a user.
+
+  Stores the encrypted long-lived access token, its expiry, granted scopes, and
+  lifecycle status (`active`, `expired`, `revoked`, `error`). The `access_token`
+  field is excluded from `Inspect` output to prevent accidental log exposure.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -22,6 +28,7 @@ defmodule AdButler.Accounts.MetaConnection do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @doc "Builds a changeset for a `MetaConnection`. Validates required fields, status inclusion, and the user+meta_user_id uniqueness constraint."
   @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
   def changeset(meta_connection, attrs) do
     meta_connection

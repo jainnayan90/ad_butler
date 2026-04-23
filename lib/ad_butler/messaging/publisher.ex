@@ -1,5 +1,16 @@
 defmodule AdButler.Messaging.Publisher do
-  @moduledoc false
+  @moduledoc """
+  GenServer that maintains a persistent AMQP connection and publishes messages
+  to the `ad_butler.sync.fanout` exchange.
+
+  Implements `AdButler.Messaging.PublisherBehaviour` for test injection. Handles
+  automatic reconnection with a 5-second delay when the connection or channel goes
+  down. Credentials in the RabbitMQ URL are never logged — all error reasons are
+  sanitized before logging.
+
+  `await_connected/1` and `await_connected_for/2` suspend the caller in the
+  GenServer mailbox (no busy-poll) until the channel opens or the timeout elapses.
+  """
   @behaviour AdButler.Messaging.PublisherBehaviour
 
   use GenServer
@@ -7,27 +18,41 @@ defmodule AdButler.Messaging.Publisher do
 
   @exchange "ad_butler.sync.fanout"
   @reconnect_delay_ms 5_000
+  @amqp_basic Application.compile_env(:ad_butler, :amqp_basic, AMQP.Basic)
 
-  def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, [], name: __MODULE__)
+  @doc "Starts the Publisher GenServer. Pass `name:` to register under a custom name; defaults to the module name."
+  def start_link(opts \\ []) do
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, [], name: name)
   end
 
   @impl AdButler.Messaging.PublisherBehaviour
+  @doc "Publishes `payload` to the sync fanout exchange. Returns `{:error, :not_connected}` if the AMQP channel is not yet up."
   @spec publish(binary()) :: :ok | {:error, term()}
   def publish(payload) do
     GenServer.call(__MODULE__, {:publish, payload})
   end
 
+  @doc "Suspends the caller until the AMQP channel is open or `timeout` milliseconds elapse."
   @spec await_connected(timeout()) :: :ok | {:error, :timeout}
   def await_connected(timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_await_connected(deadline)
+    GenServer.call(__MODULE__, :await_connected, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+  end
+
+  @doc "Suspends the caller until the given publisher `server` (pid or via-tuple) has an open channel or `timeout` ms elapses."
+  @spec await_connected_for(GenServer.server(), timeout()) :: :ok | {:error, :timeout}
+  def await_connected_for(server, timeout \\ 5_000) do
+    GenServer.call(server, :await_connected, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
   end
 
   @impl GenServer
   def init(_opts) do
     send(self(), :connect)
-    {:ok, %{conn: nil, channel: nil, conn_ref: nil, channel_ref: nil}}
+    {:ok, %{conn: nil, channel: nil, conn_ref: nil, channel_ref: nil, pending_connected: []}}
   end
 
   @impl GenServer
@@ -39,12 +64,22 @@ defmodule AdButler.Messaging.Publisher do
     {:reply, true, state}
   end
 
+  # Already connected — reply immediately.
+  def handle_call(:await_connected, _from, %{channel: channel} = state) when channel != nil do
+    {:reply, :ok, state}
+  end
+
+  # Not yet connected — store the caller and reply when the channel opens.
+  def handle_call(:await_connected, from, %{pending_connected: pending} = state) do
+    {:noreply, %{state | pending_connected: [from | pending]}}
+  end
+
   def handle_call({:publish, _payload}, _from, %{channel: nil} = state) do
     {:reply, {:error, :not_connected}, state}
   end
 
   def handle_call({:publish, payload}, _from, %{channel: channel} = state) do
-    result = AMQP.Basic.publish(channel, @exchange, "", payload, persistent: true)
+    result = @amqp_basic.publish(channel, @exchange, "", payload, persistent: true)
     {:reply, result, state}
   end
 
@@ -81,15 +116,20 @@ defmodule AdButler.Messaging.Publisher do
           {:ok, channel} ->
             conn_ref = Process.monitor(conn.pid)
             channel_ref = Process.monitor(channel.pid)
-            %{state | conn: conn, channel: channel, conn_ref: conn_ref, channel_ref: channel_ref}
+
+            new_state = %{
+              state
+              | conn: conn,
+                channel: channel,
+                conn_ref: conn_ref,
+                channel_ref: channel_ref
+            }
+
+            reply_pending_connected(new_state.pending_connected)
+            %{new_state | pending_connected: []}
 
           {:error, reason} ->
-            try do
-              AMQP.Connection.close(conn)
-            catch
-              :exit, _ -> :ok
-              :error, _ -> :ok
-            end
+            close_amqp_connection(conn)
 
             Logger.warning("AMQP channel open failed, retrying",
               reason: sanitize_reason(reason),
@@ -119,19 +159,8 @@ defmodule AdButler.Messaging.Publisher do
     close_amqp_connection(Map.get(state, :conn))
   end
 
-  defp do_await_connected(deadline) do
-    if GenServer.call(__MODULE__, :connected?) do
-      :ok
-    else
-      remaining = deadline - System.monotonic_time(:millisecond)
-
-      if remaining <= 0 do
-        {:error, :timeout}
-      else
-        Process.sleep(50)
-        do_await_connected(deadline)
-      end
-    end
+  defp reply_pending_connected(pending) do
+    Enum.each(pending, &GenServer.reply(&1, :ok))
   end
 
   defp reconnect(
@@ -147,23 +176,19 @@ defmodule AdButler.Messaging.Publisher do
   defp close_amqp_channel(nil), do: :ok
 
   defp close_amqp_channel(channel) do
-    try do
-      AMQP.Channel.close(channel)
-    catch
-      :exit, _ -> :ok
-      :error, _ -> :ok
-    end
+    AMQP.Channel.close(channel)
+  catch
+    :exit, _ -> :ok
+    :error, _ -> :ok
   end
 
   defp close_amqp_connection(nil), do: :ok
 
   defp close_amqp_connection(conn) do
-    try do
-      AMQP.Connection.close(conn)
-    catch
-      :exit, _ -> :ok
-      :error, _ -> :ok
-    end
+    AMQP.Connection.close(conn)
+  catch
+    :exit, _ -> :ok
+    :error, _ -> :ok
   end
 
   # Avoid leaking AMQP URL (which may contain credentials) in logs

@@ -1,5 +1,13 @@
 defmodule AdButler.Workers.TokenRefreshSweepWorker do
-  @moduledoc false
+  @moduledoc """
+  Oban worker that periodically sweeps for connections with tokens expiring soon
+  and enqueues a `TokenRefreshWorker` job for each.
+
+  Acts as a catch-up mechanism for connections whose normal per-refresh scheduling
+  was missed (e.g. after a deploy with no running workers). The sweep window is
+  intentionally narrower than the per-refresh buffer to avoid re-scheduling every
+  active token on every run.
+  """
   use Oban.Worker,
     queue: :default,
     max_attempts: 3,
@@ -12,12 +20,12 @@ defmodule AdButler.Workers.TokenRefreshSweepWorker do
 
   @default_limit 500
 
-  # 15 days is intentionally larger than TokenRefreshWorker's @refresh_buffer_days (10).
+  # 14 days is intentionally larger than TokenRefreshWorker's @refresh_buffer_days (10).
   # The normal path schedules a refresh at (expiry - 10 days); the sweep's job is to
   # catch connections where that scheduling was missed (e.g. after a deploy with no
-  # running workers). Using 70 days would match every active 60-day Meta token on
-  # every run, turning the catch-up sweep into a continuous hammer.
-  @sweep_days_ahead 15
+  # running workers). A 70-day window matches every active 60-day Meta token on every
+  # run, turning the catch-up sweep into a continuous hammer — 14 days keeps it narrow.
+  @sweep_days_ahead 14
 
   @impl Oban.Worker
   def perform(_job) do

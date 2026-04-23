@@ -1,7 +1,15 @@
 defmodule AdButlerWeb.Telemetry do
+  @moduledoc """
+  Telemetry supervisor that wires up Phoenix, Ecto, and VM metrics.
+
+  Starts a `telemetry_poller` for periodic VM measurements and exposes a
+  `metrics/0` function consumed by the LiveDashboard in development.
+  """
+
   use Supervisor
   import Telemetry.Metrics
 
+  @doc false
   def start_link(arg) do
     Supervisor.start_link(__MODULE__, arg, name: __MODULE__)
   end
@@ -19,6 +27,7 @@ defmodule AdButlerWeb.Telemetry do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
+  @doc "Returns the list of `Telemetry.Metrics` definitions consumed by LiveDashboard and reporters."
   def metrics do
     [
       # Phoenix Metrics

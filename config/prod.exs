@@ -12,10 +12,17 @@ config :ad_butler, AdButlerWeb.Endpoint, cache_static_manifest: "priv/static/cac
 # see the RUN --mount=type=secret lines in Dockerfile). Rotation requires recompile + restart.
 fetch_salt = fn name ->
   case System.get_env(name) do
-    nil -> raise "environment variable #{name} is missing"
-    "" -> raise "environment variable #{name} must not be empty"
-    v when byte_size(v) < 8 -> raise "environment variable #{name} is too short (min 8 bytes)"
-    v -> v
+    nil ->
+      raise "environment variable #{name} is missing"
+
+    "" ->
+      raise "environment variable #{name} must not be empty"
+
+    v when byte_size(v) < 32 ->
+      raise "environment variable #{name} is too short (min 32 bytes, Phoenix recommendation)"
+
+    v ->
+      v
   end
 end
 

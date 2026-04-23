@@ -1,6 +1,6 @@
-# Architecture Audit
+# Architecture Audit — 2026-04-23
 
-**Score: 72/100**
+**Score: 74/100**
 
 | Criterion | Score | Deductions |
 |---|---|---|
