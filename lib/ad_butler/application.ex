@@ -5,6 +5,7 @@ defmodule AdButler.Application do
 
   use Application
 
+  alias AdButler.ErrorHelpers
   alias AdButler.Messaging.RabbitMQTopology
 
   @impl true
@@ -77,7 +78,7 @@ defmodule AdButler.Application do
 
       {:error, reason} ->
         Logger.warning("RabbitMQ topology setup failed, retrying",
-          reason: inspect(reason),
+          reason: ErrorHelpers.safe_reason(reason),
           attempts_left: attempts_left - 1
         )
 

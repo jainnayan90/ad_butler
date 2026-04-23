@@ -59,6 +59,7 @@ defmodule AdButler.Integration.SyncPipelineTest do
     url = Application.fetch_env!(:ad_butler, :rabbitmq)[:url]
     {:ok, conn} = AMQP.Connection.open(url)
     {:ok, channel} = AMQP.Channel.open(conn)
+    on_exit(fn -> AMQP.Connection.close(conn) end)
 
     # Publish 3 messages to DLQ directly
     dlq = "ad_butler.sync.metadata.dlq"
@@ -74,7 +75,5 @@ defmodule AdButler.Integration.SyncPipelineTest do
     # Assert DLQ is empty
     {:ok, %{message_count: dlq_count}} = AMQP.Queue.declare(channel, dlq, passive: true)
     assert dlq_count == 0
-
-    AMQP.Connection.close(conn)
   end
 end
