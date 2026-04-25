@@ -51,7 +51,7 @@ if config_env() == :prod do
     meta_oauth_callback_url: System.fetch_env!("META_OAUTH_CALLBACK_URL")
 end
 
-if System.get_env("PHX_SERVER") do
+if config_env() == :prod do
   config :ad_butler, AdButlerWeb.Endpoint, server: true
 end
 

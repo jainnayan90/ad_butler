@@ -1,32 +1,65 @@
 # Performance Audit
+Date: 2026-04-25
 
-**Score: 80/100**
-**Date: 2026-04-23**
+## Score: 72/100
 
 ## Issues Found
 
-### HIGH — Double DB round-trip on every user-facing query
-`lib/ad_butler/ads.ex:25–37`
-Both `scope/2` and `scope_ad_account/2` unconditionally call `list_meta_connection_ids_for_user/1` before the main query. All 8 public context functions cost 2 round-trips each. A dashboard rendering campaigns + ad sets + ads incurs 6–16 round-trips. -5 pts.
+### 1. [FUNCTIONAL BUG] `@ad_accounts_list` never loaded — filter dropdown always empty on page load
+`lib/ad_butler_web/live/campaigns_live.ex:39-61`
 
-### MEDIUM — Broadway `prefetch_count` too low relative to batch throughput
-`lib/ad_butler/sync/metadata_pipeline.ex:29–39`
-`batcher_concurrency: 5` × `batch_size: 25` = 125 messages can be in-flight, but `prefetch_count: 50` caps AMQP delivery at 50 total (≤10 per processor). Batchers will time-out waiting for a full 25-message batch and flush early on `batch_timeout: 2000ms`. Correct value: `prefetch_count: 150` (≥ 5 × 25 + headroom). -5 pts.
+`handle_params/3` loads campaigns but never populates `:ad_accounts_list`. The filter
+`<select>` iterates `@ad_accounts_list`, which remains `[]` on initial load and every
+filter navigation. Ad accounts only become visible after a WebSocket reconnect fires
+`handle_info(:reload_on_reconnect)`. Root cause: the B2 connected?(socket) fix emptied
+mount but handle_params was not updated to provide the ad account list.
 
-### MEDIUM — `Oban.insert_all/1` without repo inside streaming transaction
-`lib/ad_butler/workers/sync_all_connections_worker.ex:33`
-`Oban.insert_all/1` (no repo arg) opens its own internal transaction, nesting savepoints inside the outer `Repo.transaction`. Should be `Oban.insert_all(AdButler.Repo, changesets)` to reuse the existing connection. -5 pts.
+Fix: Populate ad_accounts_list in handle_params/3 (or send :load_ad_accounts in connected
+mount and handle it separately from the campaign reload).
 
-### LOW — TokenRefreshSweepWorker issues sequential `Oban.insert/1` calls
-`lib/ad_butler/workers/token_refresh_sweep_worker.ex:41–55`
-`Enum.reduce` calls `schedule_with_jitter/1` → `Oban.insert/1` once per connection. With limit 500 this is 500 sequential DB round-trips. Should be a single `Oban.insert_all/2` over the full list. -5 pts.
+### 2. Double `list_meta_connection_ids_for_user` on reconnect
+`lib/ad_butler_web/live/campaigns_live.ex:181-192`
 
-## Clean (one line each)
+`handle_info(:reload_on_reconnect)` calls `Ads.list_campaigns` then `Ads.list_ad_accounts`
+sequentially. Each fires an independent `SELECT mc.id FROM meta_connections WHERE user_id = ?`.
+Fix: resolve mc_ids once and pass both calls the mc_ids-arity variants.
 
-- N+1 queries: `handle_batch/4` calls `get_meta_connections_by_ids/1` exactly once with WHERE IN. ✓
-- Bulk upserts: `on_conflict: {:replace, [...]}`, correct `conflict_target:`, `returning: [:id, :meta_id]`. ✓
-- Index coverage: all FK columns indexed; composite unique indexes back all upsert conflict targets; partial index on active connections for token sweep. ✓
-- ETS: `write_concurrency: :auto` correct for OTP 26. ✓
-- Repo.stream: bounded by `max_rows: 500` + `Stream.chunk_every(200)`. ✓
-- Publisher pool: `:atomics` round-robin over 5 GenServers, no bottleneck. ✓
-- Money types: all budget/cost fields are `:bigint` cents. ✓
+### 3. Missing composite index on `meta_connections(user_id, status)`
+`lib/ad_butler/accounts.ex:168-172`
+
+Hot path called once per request for every Ads list function. Only single-column user_id
+and status indexes exist. A composite (user_id, status) index gives a tighter scan.
+
+### 4. Missing status index on `ads` table
+Campaigns and ad_sets have composite (ad_account_id, status) indexes from migration
+20260423000000; ads table was skipped. Status-filtered ad queries fall back to a full
+scan on the ad_account_id index result.
+
+### 5. `@ad_accounts_list` plain assign duplicates stream on every socket diff
+`lib/ad_butler_web/live/campaigns_live.ex:33,194`
+
+`assign(:ad_accounts_list, ad_accounts)` stores the full list alongside the stream.
+The plain assign is serialized into every LiveView diff push.
+Fix: use temporary_assigns or drop one of the two representations.
+
+### 6. `list_ad_accounts/1` and `list_campaigns/2` load `raw_jsonb` unnecessarily
+`lib/ad_butler/ads.ex:48-52`, `lib/ad_butler/ads.ex:145-150`
+
+No select: clause fetches the raw_jsonb JSONB blob for every row even though LiveViews
+only render id, name, currency, timezone_name, status, objective.
+
+## Clean Areas
+Broadway handle_batch pre-fetches all MetaConnections in a single WHERE IN query.
+do_bulk_upsert is a single insert_all per entity type. Both LiveViews use stream/3
+for primary list rendering. Publisher pool uses atomics round-robin — no bottleneck.
+
+## Score Breakdown
+
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| No N+1 patterns | 20 | 30 | -5 double mc_ids on reconnect; -5 handle_params missing ad_accounts load |
+| Indexes for common queries | 10 | 20 | -5 missing composite (user_id, status); -5 missing ads status index |
+| Preloads used appropriately | 15 | 15 | No lazy-preload or N+1 via associations |
+| No GenServer bottlenecks | 15 | 15 | Publisher pool + atomics; ETS for RateLimitStore |
+| LiveView streams for large lists | 5 | 10 | -5 ad_accounts_list plain assign duplicates stream |
+| Queries avoid SELECT * | 7 | 10 | -2 list_ad_accounts raw_jsonb; -1 list_campaigns raw_jsonb |

@@ -1,7 +1,8 @@
 defmodule AdButlerWeb.PageController do
   @moduledoc """
-  Controller for top-level HTML pages: the public home page and the authenticated
-  dashboard.
+  Controller for top-level HTML pages: the public home page.
+
+  The authenticated dashboard is served by `AdButlerWeb.DashboardLive`.
   """
 
   use AdButlerWeb, :controller
@@ -9,10 +10,5 @@ defmodule AdButlerWeb.PageController do
   @doc "Renders the public home page."
   def home(conn, _params) do
     render(conn, :home)
-  end
-
-  @doc "Renders the authenticated user dashboard."
-  def dashboard(conn, _params) do
-    render(conn, :dashboard)
   end
 end

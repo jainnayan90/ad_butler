@@ -1,34 +1,56 @@
-# Security Audit — 2026-04-23
+# Security Audit
+Date: 2026-04-25
 
-**Score: 80/100**
+## Score: 88/100
 
 ## Issues Found
 
-### [M1] Meta Graph API tokens in URL query strings (Medium)
-`lib/ad_butler/meta/client.ex:21–72, 180–199`
-OWASP A02/A09. All GET calls pass `access_token` via `params:`. `filter_parameters` scrubs inbound request logs but not outbound URLs visible to Fly router, Meta access logs, or corporate proxies. `exchange_code/1` and `refresh_token/1` correctly use form bodies — extend to reads. -10 pts.
-Fix: `headers: [{"authorization", "Bearer " <> access_token}]` on `list_ad_accounts`, `list_campaigns`, `list_ad_sets`, `list_ads`, `get_creative`, `get_me`.
+### [HIGH] Meta Graph API access tokens in GET query strings
+`lib/ad_butler/meta/client.ex:21-72`
 
-### [M2] OAuth callback rate limit too coarse (Medium)
-`lib/ad_butler_web/plugs/plug_attack.ex:18–26`
-OWASP A07. Single 10 req/60s throttle covers all `/auth/*` routes. The callback path costs a Meta token-exchange + DB write — 10/min is too generous. -10 pts.
-Fix: add a dedicated rule for `/auth/meta/callback` at 3/min.
+All GET calls (list_ad_accounts, list_campaigns, list_ad_sets, list_ads, get_creative, get_me)
+pass access_token via params: (URL query string). Tokens are visible in Fly router logs, Meta
+server access logs, and any TLS-terminating proxy. exchange_code/1 and refresh_token/1 correctly
+use POST form bodies.
+Fix: use headers: [{"authorization", "Bearer " <> access_token}] on all GET calls.
+Deduction: -5 pts
 
-### [L1] Dev Cloak key defaults to all-zeros base64 (Low)
-`config/dev.exs:106–112`. Safe on isolated laptops; dangerous if dev data is ever shared. Drop the default, raise if unset.
+### [MEDIUM] OAuth callback rate limit too coarse
+`lib/ad_butler_web/plugs/plug_attack.ex:18-26`
 
-### [L2] `dev_routes` guard is implicit (Low)
-`lib/ad_butler_web/router.ex:79–93`. LiveDashboard + Swoosh mailbox mounted behind `compile_env(:ad_butler, :dev_routes)`. A future `config :ad_butler, dev_routes: true` in prod would silently expose both. Add `config_env() == :dev` to the if.
+Single 10 req/60s throttle covers all /auth/* routes. The callback path triggers a Meta
+token-exchange + DB write — 10/min is too permissive.
+Fix: Add dedicated rule for /auth/meta/callback at 3/min.
+Deduction: -5 pts
 
-## Clean (one line each)
+### [LOW] Dev Cloak key defaults to all-zeros base64
+`config/dev.exs:106-112`
 
-- Authentication: 32-byte random OAuth state, 600s TTL, secure_compare, session renewed on login, logout disconnects live sockets. ✓
-- Authorization: all user-facing reads go through scope/2; `unsafe_get_ad_account_for_sync/1` explicitly labelled. ✓
-- Input validation: changesets on User/MetaConnection; DLQ validates ad_account_id UUID; RequireAuthenticated casts session user_id via Ecto.UUID.cast. ✓
-- SQL injection: all queries use `^`; no String.to_atom, fragment, binary_to_term, raw/ on user input. ✓
-- XSS: strict CSP (script-src 'self', frame-ancestors 'none', object-src 'none'). ✓
-- CSRF: :protect_from_forgery in :browser pipeline; OAuth state covers external round-trip. ✓
-- Secrets: all prod secrets via env vars in runtime.exs; Cloak key length-checked at boot; @derive Inspect + redact: true on access_token; filter_parameters covers token/code/secret/salt. ✓
-- Transport: force_ssl HSTS, cookies http_only + same_site: Lax + secure in prod, DB TLS verify_peer + system CAs. ✓
-- Log sanitization: ErrorHelpers.safe_reason strips payloads; no logger access_token leaks. ✓
-- DLQ: UUID-validated republish, ACK-and-drop invalid, NACK+requeue on failure. ✓
+Fallback "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" encrypts with a known zero key
+when CLOAK_KEY_DEV is unset. Safe on isolated laptops, dangerous if dev data is ever shared.
+Fix: Remove the default; raise if CLOAK_KEY_DEV is unset.
+Deduction: -2 pts
+
+### [INFO] `dev_routes` guard is implicit
+`lib/ad_butler_web/router.ex:83`
+
+LiveDashboard + Swoosh mailbox behind compile_env(:ad_butler, :dev_routes). A future
+config :ad_butler, dev_routes: true in prod would expose both.
+Fix: Add && config_env() == :dev to the guard. No deduction (compile-time guard exists).
+
+## Clean Areas
+No String.to_atom with user input. No raw() calls. No SQL fragment string interpolation.
+All LiveViews behind live_session :authenticated with on_mount + RequireAuthenticated plug.
+All queries scope through meta_connection_id in ^mc_ids. Production secrets exclusively
+from env vars in runtime.exs. Strict CSP. CSRF active. OAuth state uses secure_compare + TTL.
+
+## Score Breakdown
+
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| No sobelow critical issues | 30 | 30 | Clean |
+| No sobelow high issues | 15 | 20 | [HIGH] access tokens in GET query string |
+| Authorization in all handle_events | 15 | 15 | Full coverage via on_mount + plug + query scoping |
+| No String.to_atom with user input | 10 | 10 | None found |
+| No raw() with untrusted content | 10 | 10 | None found |
+| Secrets in runtime.exs only | 8 | 15 | Prod correct; dev zero-key -2; auth rate-limit gap -5 |

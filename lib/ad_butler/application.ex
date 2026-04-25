@@ -13,6 +13,7 @@ defmodule AdButler.Application do
   require Logger
 
   alias AdButler.ErrorHelpers
+  alias AdButler.LLM.UsageHandler
   alias AdButler.Messaging.RabbitMQTopology
 
   @impl true
@@ -58,6 +59,8 @@ defmodule AdButler.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: AdButler.Supervisor]
     result = Supervisor.start_link(children, opts)
+
+    :ok = UsageHandler.attach()
 
     if env != :test do
       Task.Supervisor.start_child(AdButler.TaskSupervisor, &setup_rabbitmq_topology/0)

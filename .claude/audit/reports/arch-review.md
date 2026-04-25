@@ -1,37 +1,57 @@
-# Architecture Audit — 2026-04-23
+# Architecture Audit
+Date: 2026-04-25
 
-**Score: 72/100**
+## Score: 87/100
 
 ## Issues Found
 
-### [A1-CRITICAL] `Ads` context calls `Accounts` on every scoped query
-`lib/ad_butler/ads.ex:26, 31`
-`scope/2` and `scope_ad_account/2` both call `Accounts.list_meta_connection_ids_for_user/1` directly. `Ads` depends on `Accounts` at runtime for every user-scoped query, issuing an extra SELECT round-trip per call. `Ads` cannot be tested or reasoned about independently of `Accounts`. -10 pts.
-Fix: accept `[meta_connection_id]` as a parameter; hoist the ID lookup to the calling controller.
+### 1. `Ads` calls `Accounts` directly on every user-scoped query — undocumented
+`lib/ad_butler/ads.ex:13`
 
-### [A2-MODERATE] `MetadataPipeline` calls `Accounts.get_meta_connections_by_ids/1` directly
-`lib/ad_butler/sync/metadata_pipeline.ex:15, 66`
-`Sync` namespace reaching directly into `Accounts` context. The trade-off (avoiding tokens in AMQP messages) is valid but undocumented in the moduledoc. -5 pts.
+`AdButler.Ads` calls `Accounts.list_meta_connection_ids_for_user/1` inside every list/get
+function. `MetadataPipeline` does the same but justifies it in `@moduledoc`. `Ads` has no
+such explanation. Any signature change to that function silently touches every Ads query.
+Recommendation: Document the coupling in `@moduledoc`, or accept `mc_ids` as a
+first-class parameter and hoist the lookup to call sites.
 
-### [A3-MODERATE] Broadway throughput comment stale
-`lib/ad_butler/sync/metadata_pipeline.ex:27–29`
-Comment says "5 procs × 10 = 50" but `batch_size` is 25. Stale math will cause future maintainers to miscalibrate prefetch values. -5 pts.
+### 2. `Ads.AdAccount` schema has `belongs_to` crossing into `Accounts` namespace
+`lib/ad_butler/ads/ad_account.ex:24`
 
-### [A4-MODERATE] `setup_rabbitmq_topology` fails silently after all retries
-`lib/ad_butler/application.ex:61, 72–76`
-All 3 retries exhausted → logs error and returns `:ok`. Exchange and DLQ bindings are never declared but Publisher and MetadataPipeline start normally. Messages published to the undeclared exchange are silently dropped. -3 pts.
-Fix: crash the supervision tree on exhausted retries (fail-fast), or make topology a supervised GenServer that gates the Publisher.
+`belongs_to :meta_connection, AdButler.Accounts.MetaConnection` creates a compile-time
+schema dependency from the `Ads` context into `Accounts`. The FK column is necessary;
+the explicit `belongs_to` is optional and permanently entangles both contexts at the schema layer.
 
-### [A5-MINOR] Bulk upsert scaffolding duplicated 3×
-`lib/ad_butler/ads.ex:88–316`
-`bulk_upsert_campaigns/2`, `bulk_upsert_ad_sets/2`, `bulk_upsert_ads/2` are structurally identical (~80 lines repeated). -5 pts.
+### 3. `AdButler.LLM` namespace has no context module
+`lib/ad_butler/llm/`
 
-## Clean (one line each)
+There is a `Usage` schema and `UsageHandler` telemetry handler but no top-level `AdButler.LLM`
+context module. Project convention (followed by `Accounts` and `Ads`) requires a context
+module owning the public API. When an LLM client is wired, all callers will bypass any context boundary.
 
-- Workers→web isolation: no worker imports any `AdButlerWeb` module. ✓
-- GenServer design: Registry + `:atomics` round-robin is correct and lock-free; `pending_connected` suspension avoids busy-polling; `terminate/2` demonitors and closes AMQP resources. ✓
-- Supervision order: Repo → Vault → RateLimitStore → Oban → PublisherPool → MetadataPipeline → Endpoint. ✓
-- Cron/scheduler: string keys in all perform heads; unique idempotency guards on all 4 workers. ✓
-- Money types: all budget columns are `_cents` integers; `parse_budget/1` rounds Meta API floats. ✓
-- Query safety: all user values pinned with `^`; no string interpolation in Ecto queries. ✓
-- Third-party wrapping: Meta.Client, AMQP.Basic, PublisherPool all behind project-owned behaviours. ✓
+### 4. `CampaignsLive.handle_params/3` queries DB on disconnected render
+`lib/ad_butler_web/live/campaigns_live.ex:48`
+
+`Ads.list_campaigns/2` called unconditionally in `handle_params/3`, which fires on both the
+disconnected HTTP render and the connected WebSocket render.
+
+### 5. `LLM.Usage` missing `required_fields/0` schema convention
+`lib/ad_butler/llm/usage.ex`
+
+`Ads` schemas expose `required_fields/0` for `bulk_strip_and_filter/2`. `LLM.Usage` defines
+`@required` as a private attribute and omits the public function — non-uniform convention.
+
+## Clean Areas
+Module naming perfectly consistent. No compile-time circular dependencies. Oban workers
+idempotent with string keys. Money consistently `_cents` integers. Third-party clients
+wrapped behind behaviours. Router pipelines correct with CSRF, CSP, rate-limiting.
+
+## Score Breakdown
+
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| Context boundaries respected | 18 | 25 | Ads→Accounts undocumented; AdAccount belongs_to crossing; no LLM context |
+| Module naming consistency | 15 | 15 | Perfect |
+| Fan-out <5 contexts per module | 15 | 15 | No module exceeds 3 contexts |
+| API surface <30 funcs/context | 15 | 15 | Accounts: ~12; Ads: ~18 |
+| No compile-time circular deps | 14 | 15 | Ads.AdAccount → Accounts.MetaConnection compile-time dep |
+| Folder structure follows conventions | 10 | 15 | Missing LLM context module; handle_params DB in disconnected render |

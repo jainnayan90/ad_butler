@@ -1,0 +1,96 @@
+# Production-like stack — builds the release image, runs all prod env vars.
+# Mirrors what runs on Fly.io but without IPv6 / force-SSL / HSTS.
+#
+# Prerequisites:
+#   cp .env.example .env   # fill in all required values first
+#
+# Usage:
+#   SESSION_SIGNING_SALT=... SESSION_ENCRYPTION_SALT=... \
+#     docker compose -f docker-compose.prod.yml --env-file .env up --build
+#
+# SESSION_SIGNING_SALT and SESSION_ENCRYPTION_SALT must be set in your shell
+# (not just .env) because they are injected as BuildKit secrets during image build.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ad_butler_prod
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Runs DB migrations once and exits — matches the Fly.io release_command pattern.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      secrets:
+        - session_signing_salt
+        - session_encryption_salt
+    command: ["/app/bin/migrate"]
+    environment: &app_env
+      DATABASE_URL: "ecto://postgres:postgres@db/ad_butler_prod"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      LIVE_VIEW_SIGNING_SALT: ${LIVE_VIEW_SIGNING_SALT}
+      CLOAK_KEY: ${CLOAK_KEY}
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq"
+      RABBITMQ_POOL_SIZE: "5"
+      META_APP_ID: ${META_APP_ID}
+      META_APP_SECRET: ${META_APP_SECRET}
+      META_OAUTH_CALLBACK_URL: ${META_OAUTH_CALLBACK_URL}
+      POOL_SIZE: "10"
+      PORT: "4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      secrets:
+        - session_signing_salt
+        - session_encryption_salt
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment: *app_env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  session_signing_salt:
+    environment: SESSION_SIGNING_SALT
+  session_encryption_salt:
+    environment: SESSION_ENCRYPTION_SALT
+
+volumes:
+  postgres_prod_data:

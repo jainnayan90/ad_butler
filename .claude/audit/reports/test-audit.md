@@ -1,51 +1,49 @@
-# Test Health Audit — 2026-04-23
+# Test Health Audit
+Date: 2026-04-25
 
-**Score: 82/100**
-
-Deductions: -5 coverage gap (3 untested public accounts.ex functions), -5 flakiness risk (polling sleep in integration test), -5 missing error-path test (sweep worker), -3 partial filter coverage.
+## Score: 80/100
 
 ## Issues Found
 
-### [T1] `wait_for_queue_depth` 500ms deadline may be too tight for CI
-`test/mix/tasks/replay_dlq_test.exs` ~line 178.
-Busy-polls with 20ms sleep up to a 500ms deadline. Under CI load RabbitMQ routing may exceed 500ms → flaky `assert main_count == 3`. Test is `@moduletag :integration` so excluded from default suite, but risk is real in integration CI. Raise deadline to 2000ms. -5 pts.
+### 1. Coverage at 65.38% — below 70% threshold
+SyncAllConnectionsWorker has no test file. Every other worker has tests. Per-module coverage
+is 90-100% where tests exist; the missing worker drags the aggregate below threshold.
+Fix: Add test/ad_butler/workers/sync_all_connections_worker_test.exs.
 
-### [T2] Three public `Accounts` context functions have zero tests
-- `get_meta_connections_by_ids/1` — returns a map keyed by ID; never tested. Edge cases: empty list.
-- `stream_active_meta_connections/1` — streaming path has no coverage.
-- `list_meta_connection_ids_for_user/1` — only exercised indirectly through Ads scoping.
--5 pts.
+### 2. Process.sleep in integration test
+`test/mix/tasks/replay_dlq_test.exs:186`
 
-### [T3] `TokenRefreshSweepWorker` `{:error, :all_enqueues_failed}` path untested
-`test/ad_butler/workers/token_refresh_sweep_worker_test.exs`
-Branch has no test. -5 pts.
+wait_for_queue_depth/4 polling helper uses Process.sleep(20) in a loop. Repeated sleeps
+against a RabbitMQ broker are a flaky-test risk under CI load.
 
-### [T4] `list_ads/2` with `:ad_set_id` filter untested
-`test/ad_butler/ads_test.exs`
-Only user-isolation tested. `:ad_set_id` filter in `apply_ad_filters/2` has no test. -3 pts.
+### 3. `usage_handler_test.exs` could run async
+The telemetry handler is registered under static key "llm-usage-logger". Generating a
+unique key per test (e.g. "llm-usage-logger-#{make_ref()}") would make this module safe
+for async: true.
 
-### [T5] `MetadataPipeline` — `list_ads` error paths untested
-`test/ad_butler/sync/metadata_pipeline_test.exs`
-`list_campaigns` and `list_ad_sets` unauthorized/rate-limit paths tested; `list_ads` returning `{:error, :unauthorized}` or `{:error, :rate_limit_exceeded}` has no test.
+### 4. LiveView tests cover happy paths only
+`test/ad_butler_web/live/dashboard_live_test.exs`
+`test/ad_butler_web/live/campaigns_live_test.exs`
 
-### [T6] `setup` ordering in `MetadataPipelineTest` — minor
-`setup :verify_on_exit!` appears before `setup :set_mox_global`. Canonical Mox ordering is global-mode first. Harmless but inconsistent.
+Missing: error branch on DashboardLive data load failure; malformed/nil ad_account_id
+in CampaignsLive filter handler.
 
-## Suggestions
+### 5. Sync-heavy test suite — 52.4s / 56.1s total is synchronous
+14 of 24 modules run async: false. Most are justified. Usage_handler fix (issue 3) would
+help. Watch the trend as test count grows.
 
-- `list_expiring_meta_connections/2` has no direct test (only exercised via sweep worker).
-- `ConnCase` does not import `AdButler.Factory` — repeated manual imports.
-- `bulk_strip_and_filter/2` drop-log path has only indirect coverage via pipeline orphan test.
+## Clean Areas
+All 7 Mox-using test files correctly call setup :verify_on_exit!. Every async: false
+decision is documented with an inline comment. Factory coverage across all major schemas.
+198 tests passing, 0 failures.
 
-## Clean (one line each)
+## Score Breakdown
 
-- async safety: all `async: false` usages justified (Broadway, ETS, global Mox, Application.put_env). ✓
-- Mox discipline: `verify_on_exit!` in all 5 Mox modules; both mocks implement defined behaviours. ✓
-- Factory quality: `sequence/2` on all unique fields; FK-consistent associations; all required fields present. ✓
-- Oban testing: `use Oban.Testing` + `perform_job/2`; string-keyed args; `assert_enqueued` correct. ✓
-- Broadway testing: `Broadway.test_message/2` + `assert_receive {:ack, ...}, 2_000` correct; no sleep in Broadway tests. ✓
-- SQL Sandbox: `Sandbox.mode(:manual)` + `Sandbox.start_owner!/2` with `shared: not tags[:async]` correct. ✓
-- Auth coverage: all 7 OAuth branches covered including truncation test. ✓
-- Worker error paths: rate-limit snooze, unauthorized cancel, token-revoked cancel, invalid UUID cancel all tested. ✓
-- Integration test hygiene: `@moduletag :integration` excludes; AMQP connections closed in on_exit; queues purged. ✓
-- Encryption verification: raw DB bytes asserted different from plaintext. ✓
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| Coverage >70% | 25 | 30 | 65.38% — SyncAllConnectionsWorker untested |
+| No flaky test patterns | 15 | 20 | 1x Process.sleep in integration polling loop |
+| async: true where possible | 13 | 15 | usage_handler_test could be async |
+| verify_on_exit! in Mox tests | 15 | 15 | All 7 Mox files compliant |
+| Reasonable test duration | 7 | 10 | 56s total, 52s sync |
+| Error paths tested | 5 | 10 | Worker/context layer good; LiveView happy-path only |
