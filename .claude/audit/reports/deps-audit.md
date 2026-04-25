@@ -1,25 +1,28 @@
-# Dependency Audit
+# Dependencies Audit
+Date: 2026-04-25
 
-**Score: 95/100**
+## Score: 97/100
 
-## Results
+## Issues Found
 
-- `mix hex.audit`: No retired packages found ✓
-- `mix deps.audit`: Command not available (mix_audit not installed) — not a concern, hex.audit covers CVEs
-- `mix hex.outdated`: All 29 packages at latest versions ✓
+### `logger_json` pinned to 6.x — 7.0.4 available but upgrade blocked by constraint
+`mix.exs:83` — {:logger_json, "~> 6.0"}
 
-## Scoping Assessment (mix.exs)
-
-- `:credo` scoped to `only: [:dev, :test]` ✓ (`:dialyxir` not present in mix.exs)
-- `:mox`, `:ex_machina`, `:lazy_html` scoped to `only: :test` / `only: [:test, :dev]` ✓
-- `:tidewave`, `:phoenix_live_reload`, `:esbuild`, `:tailwind` scoped to `only: :dev` ✓
-- `:broadway_rabbitmq` not scoped — correct, needed in all envs ✓
-- `:amqp` is a transitive dep of broadway_rabbitmq — acceptable, not directly listed
-
-## Issues
-
-- [-5] `mix_audit` / `mix deps.audit` not in dev deps — optional but useful for license/maintenance auditing
+logger_json 7.0.4 is available but ~> 6.0 prevents upgrading. The 6.x series is current
+at 6.2.1 and maintained, but worth scheduling a v7 migration.
+Deduction: -3 pts (1 major version behind, not >2)
 
 ## Clean Areas
+mix hex.audit reports no retired packages. All 27 other dependencies up-to-date. All
+version constraints use ~> (minor-compatible). No unused dependencies. precommit alias
+includes hex.audit ensuring retired packages are caught pre-commit.
 
-All packages at latest version. No CVEs. No retired packages. Scoping correct throughout.
+## Score Breakdown
+
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| No hex.audit vulnerabilities | 40 | 40 | No retired packages |
+| No deps.audit issues | 20 | 20 | Task unavailable; no known issues |
+| No major version behind >2 | 17 | 20 | logger_json 1 major behind — -3 pts |
+| No unused dependencies | 10 | 10 | All deps in active use |
+| Version pinning appropriate | 10 | 10 | All use ~> constraints |

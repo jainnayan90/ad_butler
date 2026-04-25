@@ -1,5 +1,11 @@
 defmodule AdButler.AMQPBasicBehaviour do
-  @moduledoc false
+  @moduledoc """
+  Behaviour for AMQP basic operations (`get`, `publish`, `ack`, `nack`).
+
+  Implemented by `AMQP.Basic` in production. Inject a mock via
+  `Application.put_env(:ad_butler, :amqp_basic, MyMock)` in tests to avoid
+  requiring a live RabbitMQ connection.
+  """
 
   @callback get(channel :: term(), queue :: String.t(), opts :: keyword()) ::
               {:ok, String.t(), map()} | {:empty, map()}

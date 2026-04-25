@@ -1,5 +1,10 @@
 defmodule AdButler.Accounts.User do
-  @moduledoc false
+  @moduledoc """
+  Schema for a registered user, identified by their Meta (Facebook) account.
+
+  Users are uniquely keyed on `meta_user_id`. The `email` field is populated from
+  the Meta `/me` endpoint and kept up to date on every OAuth login.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -18,6 +23,7 @@ defmodule AdButler.Accounts.User do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @doc "Builds a changeset for a user. Requires `email` and `meta_user_id`; validates format and uniqueness."
   @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
   def changeset(user, attrs) do
     user

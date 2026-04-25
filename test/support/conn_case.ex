@@ -35,4 +35,11 @@ defmodule AdButlerWeb.ConnCase do
     AdButler.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc "Puts `user_id` into the test session so LiveView on_mount auth passes."
+  def log_in_user(conn, user) do
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session(:user_id, user.id)
+  end
 end

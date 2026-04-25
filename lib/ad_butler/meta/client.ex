@@ -1,5 +1,12 @@
 defmodule AdButler.Meta.Client do
-  @moduledoc false
+  @moduledoc """
+  HTTP client for the Meta (Facebook) Graph API v19.0.
+
+  Implements `AdButler.Meta.ClientBehaviour` so the module can be swapped out
+  with a mock in tests via `Application.put_env(:ad_butler, :meta_client, ...)`.
+  Rate-limit usage per ad account is tracked in an ETS table managed by
+  `AdButler.Meta.RateLimitStore` and is readable via `get_rate_limit_usage/1`.
+  """
   @behaviour AdButler.Meta.ClientBehaviour
 
   require Logger
@@ -12,10 +19,8 @@ defmodule AdButler.Meta.Client do
   @spec list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_accounts(access_token) do
     make_request(:get, "#{@graph_api_base}/me/adaccounts",
-      params: [
-        access_token: access_token,
-        fields: "id,name,currency,timezone_name,account_status"
-      ]
+      params: [fields: "id,name,currency,timezone_name,account_status"],
+      headers: auth_header(access_token)
     )
   end
 
@@ -23,7 +28,8 @@ defmodule AdButler.Meta.Client do
   @spec list_campaigns(String.t(), String.t(), keyword()) :: {:ok, list(map())} | {:error, term()}
   def list_campaigns(ad_account_id, access_token, opts \\ []) do
     make_request(:get, "#{@graph_api_base}/#{ad_account_id}/campaigns",
-      params: Keyword.merge([access_token: access_token], opts),
+      params: opts,
+      headers: auth_header(access_token),
       ad_account_id: ad_account_id
     )
   end
@@ -32,7 +38,8 @@ defmodule AdButler.Meta.Client do
   @spec list_ad_sets(String.t(), String.t(), keyword()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_sets(ad_account_id, access_token, opts \\ []) do
     make_request(:get, "#{@graph_api_base}/#{ad_account_id}/adsets",
-      params: Keyword.merge([access_token: access_token], opts),
+      params: opts,
+      headers: auth_header(access_token),
       ad_account_id: ad_account_id
     )
   end
@@ -41,7 +48,8 @@ defmodule AdButler.Meta.Client do
   @spec list_ads(String.t(), String.t(), keyword()) :: {:ok, list(map())} | {:error, term()}
   def list_ads(ad_account_id, access_token, opts \\ []) do
     make_request(:get, "#{@graph_api_base}/#{ad_account_id}/ads",
-      params: Keyword.merge([access_token: access_token], opts),
+      params: opts,
+      headers: auth_header(access_token),
       ad_account_id: ad_account_id
     )
   end
@@ -54,7 +62,7 @@ defmodule AdButler.Meta.Client do
              [
                method: :get,
                url: "#{@graph_api_base}/#{creative_id}",
-               params: [access_token: access_token]
+               headers: auth_header(access_token)
              ]
          ) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
@@ -67,6 +75,7 @@ defmodule AdButler.Meta.Client do
   @impl true
   @spec batch_request(String.t(), list(map())) :: {:ok, list(map())} | {:error, term()}
   def batch_request(access_token, requests) do
+    # Meta Batch API requires the token as a POST body field — Bearer header not accepted here.
     case Req.request(
            req_options() ++
              [
@@ -100,9 +109,9 @@ defmodule AdButler.Meta.Client do
     case Req.request(
            req_options() ++
              [
-               method: :get,
+               method: :post,
                url: "#{@graph_api_base}/oauth/access_token",
-               params: [
+               form: [
                  grant_type: "fb_exchange_token",
                  client_id: app_id,
                  client_secret: app_secret,
@@ -173,7 +182,7 @@ defmodule AdButler.Meta.Client do
     case Req.get(
            "#{@graph_api_base}/me",
            req_options() ++
-             [params: [fields: "id,name,email", access_token: access_token]]
+             [params: [fields: "id,name,email"], headers: auth_header(access_token)]
          ) do
       {:ok, %{status: 200, body: %{"id" => id} = body}} ->
         {:ok,
@@ -190,6 +199,8 @@ defmodule AdButler.Meta.Client do
         {:error, reason}
     end
   end
+
+  defp auth_header(token), do: [{"authorization", "Bearer #{token}"}]
 
   defp req_options, do: Application.get_env(:ad_butler, :req_options, [])
 

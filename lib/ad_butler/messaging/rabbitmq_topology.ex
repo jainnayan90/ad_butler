@@ -1,5 +1,12 @@
 defmodule AdButler.Messaging.RabbitMQTopology do
-  @moduledoc false
+  @moduledoc """
+  Declares the RabbitMQ exchange and queue topology required by the sync pipeline.
+
+  Sets up a fanout exchange (`ad_butler.sync.fanout`) with a durable main queue
+  and a dead-letter queue (`ad_butler.sync.metadata.dlq`) bound to its own fanout
+  exchange. Called once at application startup via `AdButler.Application` with
+  automatic retry on transient connection failures.
+  """
   require Logger
 
   @exchange "ad_butler.sync.fanout"
@@ -8,6 +15,7 @@ defmodule AdButler.Messaging.RabbitMQTopology do
   @dlq "ad_butler.sync.metadata.dlq"
   @dlq_ttl_ms 300_000
 
+  @doc "Declares the full exchange and queue topology. Opens and closes its own connection; safe to call multiple times."
   @spec setup() :: :ok | {:error, term()}
   def setup do
     case AMQP.Connection.open(rabbitmq_url()) do

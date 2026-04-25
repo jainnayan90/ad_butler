@@ -8,7 +8,14 @@ defmodule AdButlerWeb.AuthControllerTest do
   alias AdButler.Meta.ClientMock
   alias AdButler.Repo
 
+  setup :set_mox_global
   setup :verify_on_exit!
+
+  # Each test gets a unique remote_ip to avoid sharing the PlugAttack rate-limit bucket.
+  setup %{conn: conn} do
+    ip = {10, rem(System.unique_integer([:positive]), 254) + 1, 0, 1}
+    {:ok, conn: Map.put(conn, :remote_ip, ip)}
+  end
 
   describe "GET /auth/meta" do
     test "redirects to Facebook OAuth and sets session state", %{conn: conn} do
@@ -117,7 +124,7 @@ defmodule AdButlerWeb.AuthControllerTest do
           List.first(Accounts.list_meta_connections(existing_user)).id
         )
 
-      assert connection.access_token != "old_token"
+      assert connection.access_token == "new_token_after_upsert"
     end
   end
 
@@ -167,6 +174,21 @@ defmodule AdButlerWeb.AuthControllerTest do
 
       assert redirected_to(conn) == ~p"/"
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "User denied access"
+    end
+
+    test "truncates error_description longer than 200 chars in flash", %{conn: conn} do
+      long_description = String.duplicate("x", 500)
+
+      conn =
+        get(conn, ~p"/auth/meta/callback", %{
+          "error" => "access_denied",
+          "error_description" => long_description
+        })
+
+      assert redirected_to(conn) == ~p"/"
+      flash_error = Phoenix.Flash.get(conn.assigns.flash, :error)
+      # "OAuth error: " prefix (13 chars) + 200-char body = 213 max
+      assert String.length(flash_error) <= 215
     end
   end
 

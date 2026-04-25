@@ -1,11 +1,13 @@
 import Config
 
-# Configure your database
+# Configure your database.
+# POSTGRES_HOST / POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB are read from
+# env vars so the same dev.exs works both locally and inside Docker Compose.
 config :ad_butler, AdButler.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "ad_butler_dev",
+  username: System.get_env("POSTGRES_USER", "postgres"),
+  password: System.get_env("POSTGRES_PASSWORD", "postgres"),
+  hostname: System.get_env("POSTGRES_HOST", "localhost"),
+  database: System.get_env("POSTGRES_DB", "ad_butler_dev"),
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
@@ -16,10 +18,16 @@ config :ad_butler, AdButler.Repo,
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
+# Bind to loopback by default; set PHX_BIND=0.0.0.0 (e.g. in Docker Compose)
+# to accept connections from outside the container.
+bind_ip =
+  case System.get_env("PHX_BIND", "127.0.0.1") do
+    "0.0.0.0" -> {0, 0, 0, 0}
+    _ -> {127, 0, 0, 1}
+  end
+
 config :ad_butler, AdButlerWeb.Endpoint,
-  # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  http: [ip: bind_ip],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -91,7 +99,9 @@ config :phoenix_live_view,
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
 
-config :ad_butler, :rabbitmq, url: System.get_env("RABBITMQ_URL", "amqp://guest:guest@localhost")
+config :ad_butler, :rabbitmq,
+  url: System.get_env("RABBITMQ_URL", "amqp://guest:guest@localhost"),
+  pool_size: 5
 
 config :ad_butler, session_secure_cookie: false
 

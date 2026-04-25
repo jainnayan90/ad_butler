@@ -1,11 +1,19 @@
 defmodule AdButler.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  OTP Application entry point for AdButler.
+
+  Starts the supervision tree: database, vault, PubSub, rate-limit store, Oban,
+  and — outside of test — the RabbitMQ publisher and Broadway metadata pipeline.
+  Also attaches a telemetry handler that logs discarded and cancelled Oban jobs
+  and any job exceptions.
+  """
 
   use Application
 
+  require Logger
+
   alias AdButler.ErrorHelpers
+  alias AdButler.LLM.UsageHandler
   alias AdButler.Messaging.RabbitMQTopology
 
   @impl true
@@ -36,7 +44,7 @@ defmodule AdButler.Application do
       ] ++
         if env != :test do
           [
-            AdButler.Messaging.Publisher,
+            AdButler.Messaging.PublisherPool,
             AdButler.Sync.MetadataPipeline
           ]
         else
@@ -52,6 +60,8 @@ defmodule AdButler.Application do
     opts = [strategy: :one_for_one, name: AdButler.Supervisor]
     result = Supervisor.start_link(children, opts)
 
+    :ok = UsageHandler.attach()
+
     if env != :test do
       Task.Supervisor.start_child(AdButler.TaskSupervisor, &setup_rabbitmq_topology/0)
     end
@@ -60,18 +70,18 @@ defmodule AdButler.Application do
   end
 
   defp setup_rabbitmq_topology do
-    require Logger
     do_setup_rabbitmq_topology(3)
   end
 
   defp do_setup_rabbitmq_topology(0) do
-    require Logger
-    Logger.error("RabbitMQ topology setup failed after all retries")
+    Logger.error(
+      "RabbitMQ topology setup failed after all retries — halting to prevent silent message loss"
+    )
+
+    System.stop(1)
   end
 
   defp do_setup_rabbitmq_topology(attempts_left) do
-    require Logger
-
     case RabbitMQTopology.setup() do
       :ok ->
         :ok
@@ -87,14 +97,13 @@ defmodule AdButler.Application do
     end
   end
 
+  @doc "Telemetry handler for Oban job lifecycle events. Logs discarded, cancelled, and exception events."
   def handle_oban_event(
         [:oban, :job, :stop],
         _measurements,
         %{state: :discarded, job: job},
         _config
       ) do
-    require Logger
-
     Logger.error("Oban job exhausted all attempts and was discarded",
       worker: job.worker,
       id: job.id,
@@ -108,8 +117,6 @@ defmodule AdButler.Application do
         %{state: :cancelled, job: job},
         _config
       ) do
-    require Logger
-
     Logger.warning("Oban job was cancelled",
       worker: job.worker,
       id: job.id,
@@ -123,8 +130,6 @@ defmodule AdButler.Application do
         %{job: job, kind: kind, reason: reason},
         _config
       ) do
-    require Logger
-
     Logger.error("Oban job raised exception",
       worker: job.worker,
       id: job.id,

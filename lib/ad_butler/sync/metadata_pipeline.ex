@@ -1,18 +1,37 @@
 defmodule AdButler.Sync.MetadataPipeline do
-  @moduledoc false
+  @moduledoc """
+  Broadway pipeline that consumes sync messages from RabbitMQ and performs full
+  metadata syncs for Meta ad accounts.
+
+  Each message carries an `ad_account_id`. The processor resolves the account
+  record; the batcher groups messages by `meta_connection_id` (one Meta API call
+  per connection) and bulk-upserts campaigns, ad sets, and ads. Failed messages
+  are routed to the DLQ via RabbitMQ's dead-letter mechanism.
+
+  **Cross-context call:** `handle_batch/4` calls `Accounts.get_meta_connections_by_ids/1`
+  to batch-fetch connections for the entire batch in a single `WHERE IN` query,
+  avoiding one DB round-trip per message. This intentional cross-context call is
+  acceptable here because the pipeline must resolve auth tokens before calling the
+  Meta API, and the Ads context has no access to `MetaConnection` credentials.
+  """
   use Broadway
 
   require Logger
 
   alias AdButler.{Accounts, Ads, ErrorHelpers}
   alias AdButler.Ads.AdAccount
+  alias AdButler.Meta.Client, as: MetaClient
   alias Broadway.Message
 
   @queue "ad_butler.sync.metadata"
 
+  @doc "Starts the Broadway pipeline. In test env uses `Broadway.DummyProducer`; otherwise connects to RabbitMQ."
   def start_link(_opts \\ []) do
     producer = producer_config()
 
+    # Throughput math: batcher_concurrency × batch_size = max in-flight rows per tick.
+    # prefetch_count must be ≥ concurrency × batch_size to avoid starving batchers.
+    # 5 × 25 = 125 in-flight; set prefetch_count: 150 to avoid throttling delivery.
     Broadway.start_link(__MODULE__,
       name: __MODULE__,
       producer: [module: producer],
@@ -20,7 +39,7 @@ defmodule AdButler.Sync.MetadataPipeline do
         default: [concurrency: 5, partition_by: &partition_by_ad_account/1]
       ],
       batchers: [
-        default: [concurrency: 2, batch_size: 10, batch_timeout: 2_000]
+        default: [concurrency: 5, batch_size: 25, batch_timeout: 2_000]
       ]
     )
   end
@@ -44,20 +63,31 @@ defmodule AdButler.Sync.MetadataPipeline do
 
   @impl Broadway
   def handle_batch(_batcher, messages, _batch_info, _context) do
+    connection_ids =
+      messages
+      |> Enum.map(fn %Message{data: ad_account} -> ad_account.meta_connection_id end)
+      |> Enum.uniq()
+
+    # Cross-context: one WHERE IN per batch instead of one query per message (N+1 avoided).
+    connections = Accounts.get_meta_connections_by_ids(connection_ids)
+
     messages
     |> Enum.group_by(fn %Message{data: ad_account} -> ad_account.meta_connection_id end)
-    |> Enum.flat_map(fn {_conn_id, msgs} -> process_batch_group(msgs) end)
+    |> Enum.flat_map(fn {conn_id, msgs} -> process_batch_group(msgs, connections, conn_id) end)
   end
 
-  defp process_batch_group([%Message{data: first_account} | _] = msgs) do
-    connection = Accounts.get_meta_connection!(first_account.meta_connection_id)
+  defp process_batch_group(msgs, connections, conn_id) do
+    case Map.get(connections, conn_id) do
+      nil -> Enum.map(msgs, &Message.failed(&1, :connection_not_found))
+      connection -> Enum.map(msgs, &sync_message(&1, connection))
+    end
+  end
 
-    Enum.map(msgs, fn %Message{data: ad_account} = msg ->
-      case sync_ad_account(ad_account, connection) do
-        :ok -> msg
-        {:error, reason} -> Message.failed(msg, reason)
-      end
-    end)
+  defp sync_message(%Message{data: ad_account} = msg, connection) do
+    case sync_ad_account(ad_account, connection) do
+      :ok -> msg
+      {:error, reason} -> Message.failed(msg, reason)
+    end
   end
 
   defp sync_ad_account(ad_account, connection) do
@@ -174,10 +204,13 @@ defmodule AdButler.Sync.MetadataPipeline do
     }
   end
 
-  defp parse_budget(nil), do: nil
-  defp parse_budget(v) when is_integer(v), do: v
+  @doc false
+  def parse_budget(nil), do: nil
+  def parse_budget(v) when is_integer(v), do: v
+  # Meta API occasionally returns float budgets (e.g. 1000.0); round to cents.
+  def parse_budget(v) when is_float(v), do: round(v)
 
-  defp parse_budget(v) when is_binary(v) do
+  def parse_budget(v) when is_binary(v) do
     case Integer.parse(v) do
       {n, ""} -> n
       _ -> nil
@@ -193,9 +226,7 @@ defmodule AdButler.Sync.MetadataPipeline do
 
   defp partition_by_ad_account(%Message{data: %AdAccount{id: id}}), do: :erlang.phash2(id)
 
-  defp meta_client do
-    Application.get_env(:ad_butler, :meta_client, AdButler.Meta.Client)
-  end
+  defp meta_client, do: MetaClient.client()
 
   defp producer_config do
     case Application.get_env(:ad_butler, :broadway_producer) do
@@ -205,7 +236,7 @@ defmodule AdButler.Sync.MetadataPipeline do
       _ ->
         {BroadwayRabbitMQ.Producer,
          queue: @queue,
-         qos: [prefetch_count: 10],
+         qos: [prefetch_count: 150],
          connection: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]}
     end
   end

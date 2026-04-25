@@ -1,4 +1,13 @@
 defmodule AdButlerWeb.AuthController do
+  @moduledoc """
+  Controller for Meta (Facebook) OAuth 2.0 authentication.
+
+  Handles the full OAuth flow: redirecting the user to Facebook (`request/2`),
+  receiving the callback with an auth code (`callback/2`), and logging out
+  (`logout/2`). CSRF protection uses a signed, time-limited state parameter
+  stored in the session.
+  """
+
   use AdButlerWeb, :controller
 
   require Logger
@@ -8,6 +17,7 @@ defmodule AdButlerWeb.AuthController do
 
   @facebook_oauth_url "https://www.facebook.com/dialog/oauth"
 
+  @doc "Redirects the user to Meta's OAuth dialog with a signed CSRF state parameter."
   def request(conn, _params) do
     state = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
     app_id = Application.fetch_env!(:ad_butler, :meta_app_id)
@@ -28,10 +38,20 @@ defmodule AdButlerWeb.AuthController do
     |> redirect(external: oauth_url)
   end
 
-  def callback(conn, %{"error" => _error, "error_description" => description}) do
+  @doc """
+  Handles the Meta OAuth callback. Three clause variants:
+  - User-denied / error response: flashes the error and redirects home.
+  - Success: verifies CSRF state, exchanges the code, creates the session.
+  - Malformed params: rejects with a generic error flash.
+  """
+  def callback(conn, %{"error" => _error, "error_description" => description})
+      when is_binary(description) do
+    safe_description = String.slice(description, 0, 200)
+    Logger.warning("OAuth error from provider (truncated): #{safe_description}")
+
     conn
     |> delete_session(:oauth_state)
-    |> put_flash(:error, "OAuth error: #{description}")
+    |> put_flash(:error, "OAuth error: #{safe_description}")
     |> redirect(to: ~p"/")
   end
 
@@ -93,6 +113,7 @@ defmodule AdButlerWeb.AuthController do
     end
   end
 
+  @doc "Drops the session and disconnects any live sockets for the current user."
   def logout(conn, _params) do
     user_id = get_session(conn, :user_id)
 

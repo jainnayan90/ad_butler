@@ -238,4 +238,88 @@ defmodule AdButler.AccountsTest do
       assert hd(result).id == active.id
     end
   end
+
+  describe "get_meta_connections_by_ids/1" do
+    test "returns empty map for empty list" do
+      assert %{} = Accounts.get_meta_connections_by_ids([])
+    end
+
+    test "returns map keyed by id for a single existing ID" do
+      conn = insert(:meta_connection)
+      result = Accounts.get_meta_connections_by_ids([conn.id])
+      assert map_size(result) == 1
+      assert result[conn.id].id == conn.id
+    end
+
+    test "returns map keyed by id for multiple existing IDs" do
+      conn1 = insert(:meta_connection)
+      conn2 = insert(:meta_connection)
+      result = Accounts.get_meta_connections_by_ids([conn1.id, conn2.id])
+      assert map_size(result) == 2
+      assert Map.has_key?(result, conn1.id)
+      assert Map.has_key?(result, conn2.id)
+    end
+
+    test "omits IDs that do not exist" do
+      conn = insert(:meta_connection)
+      missing_id = Ecto.UUID.generate()
+      result = Accounts.get_meta_connections_by_ids([conn.id, missing_id])
+      assert map_size(result) == 1
+      assert Map.has_key?(result, conn.id)
+      refute Map.has_key?(result, missing_id)
+    end
+  end
+
+  describe "stream_active_meta_connections/1" do
+    test "returns an enumerable that yields active connections" do
+      conn = insert(:meta_connection, status: "active")
+
+      rows =
+        Repo.transaction(fn ->
+          Accounts.stream_active_meta_connections() |> Enum.to_list()
+        end)
+
+      assert {:ok, list} = rows
+      assert Enum.any?(list, &(&1.id == conn.id))
+    end
+
+    test "does not yield inactive connections" do
+      _revoked = insert(:meta_connection, status: "revoked")
+
+      {:ok, list} =
+        Repo.transaction(fn ->
+          Accounts.stream_active_meta_connections() |> Enum.to_list()
+        end)
+
+      assert Enum.all?(list, &(&1.status == "active"))
+    end
+  end
+
+  describe "list_meta_connection_ids_for_user/1" do
+    test "returns UUIDs for all active connections belonging to the user" do
+      user = insert(:user)
+      conn1 = insert(:meta_connection, user: user, status: "active")
+      conn2 = insert(:meta_connection, user: user, status: "active")
+      _inactive = insert(:meta_connection, user: user, status: "revoked")
+
+      ids = Accounts.list_meta_connection_ids_for_user(user)
+
+      assert length(ids) == 2
+      assert conn1.id in ids
+      assert conn2.id in ids
+    end
+
+    test "returns empty list for user with no connections" do
+      user = insert(:user)
+      assert [] = Accounts.list_meta_connection_ids_for_user(user)
+    end
+
+    test "does not return another user's connection IDs" do
+      user = insert(:user)
+      other_user = insert(:user)
+      _other_conn = insert(:meta_connection, user: other_user, status: "active")
+
+      assert [] = Accounts.list_meta_connection_ids_for_user(user)
+    end
+  end
 end

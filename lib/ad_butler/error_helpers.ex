@@ -1,5 +1,10 @@
 defmodule AdButler.ErrorHelpers do
-  @moduledoc false
+  @moduledoc """
+  Utility helpers for safe error handling and logging.
+
+  All functions here are designed to strip or sanitize sensitive information
+  (e.g. access tokens embedded in error structs) before values reach log output.
+  """
   @doc """
   Sanitizes error terms for safe logging — returns only the tag atom, never
   raw structs or binaries that may embed secrets (e.g. Mint transport errors

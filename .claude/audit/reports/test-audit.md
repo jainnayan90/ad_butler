@@ -1,36 +1,49 @@
 # Test Health Audit
+Date: 2026-04-25
 
-**Score: 81/100**
+## Score: 80/100
 
-| Criterion | Score | Notes |
-|---|---|---|
-| Coverage >70% | 22/30 | Estimated ~60%; upsert_ad_set/ad missing direct tests |
-| No flaky patterns | 15/20 | Process.sleep(100) in replay_dlq_test.exs:33 |
-| async: true where possible | 15/15 | All async: false usages justified |
-| verify_on_exit! in Mox tests | 15/15 | All 6 Mox modules comply |
-| Test duration | 10/10 | No timing issues |
-| Error paths | 4/10 | Several missing branches |
+## Issues Found
 
-## Issues
+### 1. Coverage at 65.38% — below 70% threshold
+SyncAllConnectionsWorker has no test file. Every other worker has tests. Per-module coverage
+is 90-100% where tests exist; the missing worker drags the aggregate below threshold.
+Fix: Add test/ad_butler/workers/sync_all_connections_worker_test.exs.
 
-**[T1] Process.sleep(100) in integration test — test/mix/tasks/replay_dlq_test.exs:33**
-Flaky — too short under load, vacuously passes with 0 messages. Pre-existing W10. Replace with AMQP consumer subscription + assert_receive or polling retry with timeout.
+### 2. Process.sleep in integration test
+`test/mix/tasks/replay_dlq_test.exs:186`
 
-**[T2] Sandbox.allow gap — test/ad_butler/sync/scheduler_test.exs**
-Pre-existing W8. Scheduler process not covered by test sandbox. Add:
-`Ecto.Adapters.SQL.Sandbox.allow(AdButler.Repo, self(), pid)` after start_supervised.
+wait_for_queue_depth/4 polling helper uses Process.sleep(20) in a loop. Repeated sleeps
+against a RabbitMQ broker are a flaky-test risk under CI load.
 
-**[T3] metadata_pipeline_test.exs — unknown ad_account_id test missing zero-row assertion**
-Success test checks Repo.aggregate count = 0 but failure test doesn't. Inconsistent coverage.
+### 3. `usage_handler_test.exs` could run async
+The telemetry handler is registered under static key "llm-usage-logger". Generating a
+unique key per test (e.g. "llm-usage-logger-#{make_ref()}") would make this module safe
+for async: true.
 
-**[T4] fetch_ad_accounts_worker_test.exs:111 — publish payload content never asserted**
-Idempotency test expects PublisherMock.publish 2x but never validates payload. Payload regression undetectable.
+### 4. LiveView tests cover happy paths only
+`test/ad_butler_web/live/dashboard_live_test.exs`
+`test/ad_butler_web/live/campaigns_live_test.exs`
 
-**[T5] Coverage gap — upsert_ad_set/2, upsert_ad/2 have no direct idempotency tests**
-Only covered indirectly via pipeline. Mirror upsert_ad_account/2 test pattern.
+Missing: error branch on DashboardLive data load failure; malformed/nil ad_account_id
+in CampaignsLive filter handler.
 
-**[T6] Coverage gap — get_campaign!/2 success path never directly asserted**
+### 5. Sync-heavy test suite — 52.4s / 56.1s total is synchronous
+14 of 24 modules run async: false. Most are justified. Usage_handler fix (issue 3) would
+help. Watch the trend as test count grows.
 
 ## Clean Areas
+All 7 Mox-using test files correctly call setup :verify_on_exit!. Every async: false
+decision is documented with an inline comment. Factory coverage across all major schemas.
+198 tests passing, 0 failures.
 
-factory.ex fully compliant after all fixes. ads_test.exs: async: true, proper isolation, idempotency verified. fetch_ad_accounts_worker_test.exs: all 5 branches covered. metadata_pipeline_test.exs: Broadway test_message pattern, no sleep. scheduler_test.exs: sys.get_state/1 sync, no sleep. Mox discipline: boundary mocks only, all implement behaviours.
+## Score Breakdown
+
+| Criterion | Score | Max | Notes |
+|-----------|-------|-----|-------|
+| Coverage >70% | 25 | 30 | 65.38% — SyncAllConnectionsWorker untested |
+| No flaky test patterns | 15 | 20 | 1x Process.sleep in integration polling loop |
+| async: true where possible | 13 | 15 | usage_handler_test could be async |
+| verify_on_exit! in Mox tests | 15 | 15 | All 7 Mox files compliant |
+| Reasonable test duration | 7 | 10 | 56s total, 52s sync |
+| Error paths tested | 5 | 10 | Worker/context layer good; LiveView happy-path only |

@@ -1,0 +1,20 @@
+FROM elixir:1.16-otp-26-alpine
+
+# inotify-tools — required for Phoenix live reload to detect file changes inside the container
+RUN apk add --no-cache build-base git nodejs npm inotify-tools
+
+WORKDIR /app
+
+RUN mix local.hex --force && mix local.rebar --force
+
+ENV MIX_ENV=dev
+
+# Pre-install deps so the layer is cached — the volume mount below will overlay
+# the source tree but deps/ and _build/ live in named volumes (see compose file).
+COPY mix.exs mix.lock ./
+RUN mix deps.get
+
+EXPOSE 4000
+
+# On startup: sync any new deps, create/migrate the DB, then start the server.
+CMD ["sh", "-c", "mix deps.get && mix ecto.create --quiet && mix ecto.migrate --quiet && mix phx.server"]

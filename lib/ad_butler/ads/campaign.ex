@@ -1,5 +1,11 @@
 defmodule AdButler.Ads.Campaign do
-  @moduledoc false
+  @moduledoc """
+  Schema for a Meta campaign within an ad account.
+
+  `status` is validated against Meta's allowed values (`ACTIVE`, `PAUSED`,
+  `DELETED`, `ARCHIVED`). Budget fields store amounts in cents. `raw_jsonb`
+  preserves the full API payload for fields not mapped to explicit columns.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -26,6 +32,10 @@ defmodule AdButler.Ads.Campaign do
   @required [:ad_account_id, :meta_id, :name, :status, :objective]
   @optional [:daily_budget_cents, :lifetime_budget_cents, :raw_jsonb]
 
+  @doc "Returns the list of required field names for bulk-filtering."
+  def required_fields, do: @required
+
+  @doc "Builds a changeset for a campaign. Validates required fields, `status` inclusion, and the `(ad_account_id, meta_id)` uniqueness constraint."
   def changeset(campaign, attrs) do
     campaign
     |> cast(attrs, @required ++ @optional)

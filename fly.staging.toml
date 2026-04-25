@@ -1,0 +1,42 @@
+app = "ad-butler-staging"
+primary_region = "iad"
+kill_timeout = 60
+
+# SESSION_SIGNING_SALT and SESSION_ENCRYPTION_SALT are compile-time secrets.
+# They are NOT Fly runtime secrets — pass them as --build-secret flags:
+#
+#   fly deploy --config fly.staging.toml \
+#     --build-secret SESSION_SIGNING_SALT=<value> \
+#     --build-secret SESSION_ENCRYPTION_SALT=<value>
+#
+# If omitted the build fails at compile time (Application.compile_env!/2 in prod.exs).
+
+[build]
+
+[deploy]
+  release_command = "/app/bin/migrate"
+
+[env]
+  PHX_HOST = "ad-butler-staging.fly.dev"
+  PORT = "4000"
+  ECTO_IPV6 = "true"
+  ERL_AFLAGS = "-proto_dist inet6_tcp"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    path = "/health/readiness"
+    timeout = "5s"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

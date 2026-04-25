@@ -1,5 +1,13 @@
 defmodule AdButler.Workers.FetchAdAccountsWorker do
-  @moduledoc false
+  @moduledoc """
+  Oban worker that fetches all Meta ad accounts for a single `MetaConnection` and
+  publishes a sync message to RabbitMQ for each account.
+
+  On success each account is upserted and a `{"ad_account_id": ..., "sync_type":
+  "full"}` message is published to the fanout exchange so `MetadataPipeline` can
+  pick it up. On rate-limit the job snoozes 15 minutes; on auth failure the
+  connection is revoked and the job cancelled.
+  """
   use Oban.Worker,
     queue: :sync,
     max_attempts: 5,
@@ -13,6 +21,7 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
 
   alias AdButler.{Accounts, Ads, ErrorHelpers}
   alias AdButler.Accounts.MetaConnection
+  alias AdButler.Meta.Client, as: MetaClient
 
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) ::
@@ -44,6 +53,9 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
         # handles duplicates via idempotent upserts (conflict target: ad_account_id + meta_id).
         case Enum.find(results, &match?({:error, _}, &1)) do
           nil -> :ok
+          # Snooze rather than retry — retrying would re-call Meta's API and burn
+          # rate-limit quota just because AMQP is temporarily disconnected.
+          {:error, :not_connected} -> {:snooze, 60}
           error -> error
         end
 
@@ -107,11 +119,9 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
     }
   end
 
-  defp meta_client do
-    Application.get_env(:ad_butler, :meta_client, AdButler.Meta.Client)
-  end
+  defp meta_client, do: MetaClient.client()
 
   defp publisher do
-    Application.get_env(:ad_butler, :messaging_publisher, AdButler.Messaging.Publisher)
+    Application.get_env(:ad_butler, :messaging_publisher, AdButler.Messaging.PublisherPool)
   end
 end
