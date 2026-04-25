@@ -11,6 +11,12 @@ defmodule AdButlerWeb.AuthControllerTest do
   setup :set_mox_global
   setup :verify_on_exit!
 
+  # Each test gets a unique remote_ip to avoid sharing the PlugAttack rate-limit bucket.
+  setup %{conn: conn} do
+    ip = {10, rem(System.unique_integer([:positive]), 254) + 1, 0, 1}
+    {:ok, conn: Map.put(conn, :remote_ip, ip)}
+  end
+
   describe "GET /auth/meta" do
     test "redirects to Facebook OAuth and sets session state", %{conn: conn} do
       conn = get(conn, ~p"/auth/meta")
@@ -118,7 +124,7 @@ defmodule AdButlerWeb.AuthControllerTest do
           List.first(Accounts.list_meta_connections(existing_user)).id
         )
 
-      assert connection.access_token != "old_token"
+      assert connection.access_token == "new_token_after_upsert"
     end
   end
 

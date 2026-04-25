@@ -7,6 +7,12 @@ defmodule AdButler.Sync.MetadataPipeline do
   record; the batcher groups messages by `meta_connection_id` (one Meta API call
   per connection) and bulk-upserts campaigns, ad sets, and ads. Failed messages
   are routed to the DLQ via RabbitMQ's dead-letter mechanism.
+
+  **Cross-context call:** `handle_batch/4` calls `Accounts.get_meta_connections_by_ids/1`
+  to batch-fetch connections for the entire batch in a single `WHERE IN` query,
+  avoiding one DB round-trip per message. This intentional cross-context call is
+  acceptable here because the pipeline must resolve auth tokens before calling the
+  Meta API, and the Ads context has no access to `MetaConnection` credentials.
   """
   use Broadway
 
@@ -25,8 +31,7 @@ defmodule AdButler.Sync.MetadataPipeline do
 
     # Throughput math: batcher_concurrency × batch_size = max in-flight rows per tick.
     # prefetch_count must be ≥ concurrency × batch_size to avoid starving batchers.
-    # 5 × 25 = 125 in-flight; prefetch_count 50 per processor (5 procs × 10 = 50) — increase
-    # prefetch to 50 to match the higher batch throughput.
+    # 5 × 25 = 125 in-flight; set prefetch_count: 150 to avoid throttling delivery.
     Broadway.start_link(__MODULE__,
       name: __MODULE__,
       producer: [module: producer],
@@ -63,6 +68,7 @@ defmodule AdButler.Sync.MetadataPipeline do
       |> Enum.map(fn %Message{data: ad_account} -> ad_account.meta_connection_id end)
       |> Enum.uniq()
 
+    # Cross-context: one WHERE IN per batch instead of one query per message (N+1 avoided).
     connections = Accounts.get_meta_connections_by_ids(connection_ids)
 
     messages
@@ -230,7 +236,7 @@ defmodule AdButler.Sync.MetadataPipeline do
       _ ->
         {BroadwayRabbitMQ.Producer,
          queue: @queue,
-         qos: [prefetch_count: 50],
+         qos: [prefetch_count: 150],
          connection: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]}
     end
   end

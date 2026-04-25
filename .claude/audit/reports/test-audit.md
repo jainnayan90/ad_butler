@@ -1,79 +1,51 @@
 # Test Health Audit — 2026-04-23
 
-**Score: 79/100**
+**Score: 82/100**
+
+Deductions: -5 coverage gap (3 untested public accounts.ex functions), -5 flakiness risk (polling sleep in integration test), -5 missing error-path test (sweep worker), -3 partial filter coverage.
 
 ## Issues Found
 
-### MEDIUM — [T1] `AuthControllerTest` missing `set_mox_global` setup
-`test/ad_butler_web/controllers/auth_controller_test.exs` uses `expect`/`stub` on `ClientMock` but has neither `setup :set_mox_global` nor `setup :set_mox_from_context`. Works today because the test is `async: false`, but if the controller dispatch ever spawns a process mock lookups will fail silently. Every other `async: false` Mox file uses `setup :set_mox_global`.
+### [T1] `wait_for_queue_depth` 500ms deadline may be too tight for CI
+`test/mix/tasks/replay_dlq_test.exs` ~line 178.
+Busy-polls with 20ms sleep up to a 500ms deadline. Under CI load RabbitMQ routing may exceed 500ms → flaky `assert main_count == 3`. Test is `@moduletag :integration` so excluded from default suite, but risk is real in integration CI. Raise deadline to 2000ms. -5 pts.
 
-### MEDIUM — [T2] Five `Meta.Client` behaviour callbacks have zero unit tests
-`list_campaigns/3`, `list_ad_sets/3`, `list_ads/3`, `refresh_token/1`, `get_creative/2` — all implemented in `client.ex` but not tested directly. Rate-limit header parsing in `make_request/3` (used by three of these) is exercised only via `list_ad_accounts/1`.
+### [T2] Three public `Accounts` context functions have zero tests
+- `get_meta_connections_by_ids/1` — returns a map keyed by ID; never tested. Edge cases: empty list.
+- `stream_active_meta_connections/1` — streaming path has no coverage.
+- `list_meta_connection_ids_for_user/1` — only exercised indirectly through Ads scoping.
+-5 pts.
 
-### MEDIUM — [T3] `MetadataPipeline` — `{:error, :unauthorized}` path untested
-`sync_ad_account/2` tests `rate_limit_exceeded` but not `unauthorized` returned from `list_campaigns`/`list_ad_sets`/`list_ads`.
+### [T3] `TokenRefreshSweepWorker` `{:error, :all_enqueues_failed}` path untested
+`test/ad_butler/workers/token_refresh_sweep_worker_test.exs`
+Branch has no test. -5 pts.
 
-### MEDIUM — [T4] `MetadataPipeline` — orphan ad-set drop path untested
-`upsert_ad_sets/3` silently drops ad sets whose `campaign_id` resolves to nil and continues without failing the message. There's a test for orphan ads but not for orphan ad sets.
+### [T4] `list_ads/2` with `:ad_set_id` filter untested
+`test/ad_butler/ads_test.exs`
+Only user-isolation tested. `:ad_set_id` filter in `apply_ad_filters/2` has no test. -3 pts.
 
-### MEDIUM — [T5] `MetadataPipeline` — malformed JSON message path untested
-`handle_message/3` returns `Message.failed(message, :invalid_payload)` for non-JSON input and JSON missing `ad_account_id`, but neither branch has a test.
+### [T5] `MetadataPipeline` — `list_ads` error paths untested
+`test/ad_butler/sync/metadata_pipeline_test.exs`
+`list_campaigns` and `list_ad_sets` unauthorized/rate-limit paths tested; `list_ads` returning `{:error, :unauthorized}` or `{:error, :rate_limit_exceeded}` has no test.
 
-### MEDIUM — [T6] `parse_budget/1` edge cases untested
-Only the `"1000"` string case is exercised. `nil`, plain integer, and non-numeric string (`"abc"` → `nil`) paths are untested. Silent nil writes into integer columns from malformed API data would go undetected.
+### [T6] `setup` ordering in `MetadataPipelineTest` — minor
+`setup :verify_on_exit!` appears before `setup :set_mox_global`. Canonical Mox ordering is global-mode first. Harmless but inconsistent.
 
-### MEDIUM — [T7] `RateLimitStore` GenServer has no tests
-The cleanup logic via `handle_info(:cleanup, _)` has no test. A `start_supervised(RateLimitStore)` + manual ETS insert + `send(pid, :cleanup)` + assertion would fully cover it.
+## Suggestions
 
-### LOW — [T8] Factory association-divergence not guarded by a test
-`ad_set_factory` and `ad_factory` warn (via comments) that overriding only `ad_account:` or `ad_set:` diverges FK IDs. No test exercises this to produce a clear error.
+- `list_expiring_meta_connections/2` has no direct test (only exercised via sweep worker).
+- `ConnCase` does not import `AdButler.Factory` — repeated manual imports.
+- `bulk_strip_and_filter/2` drop-log path has only indirect coverage via pipeline orphan test.
 
-### LOW — [T9] `ConnCase` does not import `Factory`
-Requires each controller test to repeat `import AdButler.Factory` manually.
+## Clean (one line each)
 
-## Clean Areas
-
-- `verify_on_exit!` present in all 6 files that use `expect`; no leaked expectations
-- `async: false` justified in all Broadway/PlugAttack/global-ETS tests
-- `set_mox_from_context` correctly paired with `async: true` in AccountsTest and TokenRefreshWorkerTest
-- Oban: `perform_job/2` throughout; no `drain_queue` anti-pattern; `assert_enqueued`/`refute_enqueued` correct
-- Broadway: `test_message/2` + `assert_receive {:ack, ^ref, ...}` with 2 s timeout used correctly
-- SQL sandbox: `Sandbox.mode(:manual)` + `Sandbox.start_owner!` pattern correct
-- Token encryption: raw DB bytes checked to differ from plaintext — genuine verification
-- All six OAuth error branches covered in AuthControllerTest
-- Rate-limit snooze, unauthorized cancel, and generic retry paths covered in both worker tests
-- Integration test correctly tagged `:integration`, excluded from default run, no `Process.sleep`
-- `replay_dlq_test.exs` has unit stub test + integration test covering nack-on-publish-failure
-
-| Criterion | Score | Notes |
-|---|---|---|
-| Coverage >70% | 22/30 | Estimated ~60%; upsert_ad_set/ad missing direct tests |
-| No flaky patterns | 15/20 | Process.sleep(100) in replay_dlq_test.exs:33 |
-| async: true where possible | 15/15 | All async: false usages justified |
-| verify_on_exit! in Mox tests | 15/15 | All 6 Mox modules comply |
-| Test duration | 10/10 | No timing issues |
-| Error paths | 4/10 | Several missing branches |
-
-## Issues
-
-**[T1] Process.sleep(100) in integration test — test/mix/tasks/replay_dlq_test.exs:33**
-Flaky — too short under load, vacuously passes with 0 messages. Pre-existing W10. Replace with AMQP consumer subscription + assert_receive or polling retry with timeout.
-
-**[T2] Sandbox.allow gap — test/ad_butler/sync/scheduler_test.exs**
-Pre-existing W8. Scheduler process not covered by test sandbox. Add:
-`Ecto.Adapters.SQL.Sandbox.allow(AdButler.Repo, self(), pid)` after start_supervised.
-
-**[T3] metadata_pipeline_test.exs — unknown ad_account_id test missing zero-row assertion**
-Success test checks Repo.aggregate count = 0 but failure test doesn't. Inconsistent coverage.
-
-**[T4] fetch_ad_accounts_worker_test.exs:111 — publish payload content never asserted**
-Idempotency test expects PublisherMock.publish 2x but never validates payload. Payload regression undetectable.
-
-**[T5] Coverage gap — upsert_ad_set/2, upsert_ad/2 have no direct idempotency tests**
-Only covered indirectly via pipeline. Mirror upsert_ad_account/2 test pattern.
-
-**[T6] Coverage gap — get_campaign!/2 success path never directly asserted**
-
-## Clean Areas
-
-factory.ex fully compliant after all fixes. ads_test.exs: async: true, proper isolation, idempotency verified. fetch_ad_accounts_worker_test.exs: all 5 branches covered. metadata_pipeline_test.exs: Broadway test_message pattern, no sleep. scheduler_test.exs: sys.get_state/1 sync, no sleep. Mox discipline: boundary mocks only, all implement behaviours.
+- async safety: all `async: false` usages justified (Broadway, ETS, global Mox, Application.put_env). ✓
+- Mox discipline: `verify_on_exit!` in all 5 Mox modules; both mocks implement defined behaviours. ✓
+- Factory quality: `sequence/2` on all unique fields; FK-consistent associations; all required fields present. ✓
+- Oban testing: `use Oban.Testing` + `perform_job/2`; string-keyed args; `assert_enqueued` correct. ✓
+- Broadway testing: `Broadway.test_message/2` + `assert_receive {:ack, ...}, 2_000` correct; no sleep in Broadway tests. ✓
+- SQL Sandbox: `Sandbox.mode(:manual)` + `Sandbox.start_owner!/2` with `shared: not tags[:async]` correct. ✓
+- Auth coverage: all 7 OAuth branches covered including truncation test. ✓
+- Worker error paths: rate-limit snooze, unauthorized cancel, token-revoked cancel, invalid UUID cancel all tested. ✓
+- Integration test hygiene: `@moduletag :integration` excludes; AMQP connections closed in on_exit; queues purged. ✓
+- Encryption verification: raw DB bytes asserted different from plaintext. ✓

@@ -1,33 +1,37 @@
 # Architecture Audit — 2026-04-23
 
-**Score: 74/100**
+**Score: 72/100**
 
-| Criterion | Score | Deductions |
-|---|---|---|
-| Context boundaries | 15/25 | -5 Ads→Accounts JOIN; -5 Pipeline direct Repo |
-| Module naming | 15/15 | — |
-| Fan-out <5 | 15/15 | — |
-| API surface <30 | 15/15 | — |
-| No compile cycles | 15/15 | No cycles found |
-| Folder conventions | 12/15 | -3 Phoenix 1.8 Scope absent |
+## Issues Found
 
-## Issues
+### [A1-CRITICAL] `Ads` context calls `Accounts` on every scoped query
+`lib/ad_butler/ads.ex:26, 31`
+`scope/2` and `scope_ad_account/2` both call `Accounts.list_meta_connection_ids_for_user/1` directly. `Ads` depends on `Accounts` at runtime for every user-scoped query, issuing an extra SELECT round-trip per call. `Ads` cannot be tested or reasoned about independently of `Accounts`. -10 pts.
+Fix: accept `[meta_connection_id]` as a parameter; hoist the ID lookup to the calling controller.
 
-**[A1-CRITICAL] Ads context JOINs Accounts.MetaConnection directly — ads.ex:5,16,25**
-`defp scope/2` and `defp scope_ad_account/2` alias and join against `Accounts.MetaConnection`. Ads must not query Accounts schemas directly. Fix: scope against AdAccount.meta_connection_id only, or add `Accounts.list_meta_connection_ids_for_user/1` returning IDs.
+### [A2-MODERATE] `MetadataPipeline` calls `Accounts.get_meta_connections_by_ids/1` directly
+`lib/ad_butler/sync/metadata_pipeline.ex:15, 66`
+`Sync` namespace reaching directly into `Accounts` context. The trade-off (avoiding tokens in AMQP messages) is valid but undocumented in the moduledoc. -5 pts.
 
-**[A2-CRITICAL] MetadataPipeline calls Repo.get(AdAccount) directly — metadata_pipeline.ex:8,32**
-Bypasses Ads context. Add `Ads.get_ad_account/1` and remove direct Repo + AdAccount alias from the pipeline.
+### [A3-MODERATE] Broadway throughput comment stale
+`lib/ad_butler/sync/metadata_pipeline.ex:27–29`
+Comment says "5 procs × 10 = 50" but `batch_size` is 25. Stale math will cause future maintainers to miscalibrate prefetch values. -5 pts.
 
-**[A3-MODERATE] Phoenix 1.8 Scope pattern absent**
-Project runs Phoenix 1.8.3 but no %Scope{} struct. list_all_active_meta_connections/0 has no scope guard — safe now (Scheduler-only) but structurally dangerous on web paths.
+### [A4-MODERATE] `setup_rabbitmq_topology` fails silently after all retries
+`lib/ad_butler/application.ex:61, 72–76`
+All 3 retries exhausted → logs error and returns `:ok`. Exchange and DLQ bindings are never declared but Publisher and MetadataPipeline start normally. Messages published to the undeclared exchange are silently dropped. -3 pts.
+Fix: crash the supervision tree on exhausted retries (fail-fast), or make topology a supervised GenServer that gates the Publisher.
 
-**[A4-MINOR] Oban job args use atom key in Scheduler — scheduler.ex:16**
-`%{meta_connection_id: connection.id}` should be `%{"meta_connection_id" => connection.id}`. Workers pattern-match on string keys. Works today via Jason encoding but violates Oban iron law.
+### [A5-MINOR] Bulk upsert scaffolding duplicated 3×
+`lib/ad_butler/ads.ex:88–316`
+`bulk_upsert_campaigns/2`, `bulk_upsert_ad_sets/2`, `bulk_upsert_ads/2` are structurally identical (~80 lines repeated). -5 pts.
 
-**[A5-MINOR] RequireAuthenticated plug uses hardcoded "/" not ~p"/"**
-Inconsistent with verified routes used elsewhere.
+## Clean (one line each)
 
-## Clean Areas
-
-Money: all budgets as _cents integers. Query pinning: all ^ present. Worker idempotency: unique constraints on all workers. Third-party wrapping: Meta.Client and Publisher behind behaviours. Supervision: correct env gating. Security headers: CSP, CSRF, rate-limiting present. Encryption: access_token Encrypted.Binary with redact: true. API surface: Accounts=9, Ads=14 — well under 30. Fan-out: max 2 context imports per module.
+- Workers→web isolation: no worker imports any `AdButlerWeb` module. ✓
+- GenServer design: Registry + `:atomics` round-robin is correct and lock-free; `pending_connected` suspension avoids busy-polling; `terminate/2` demonitors and closes AMQP resources. ✓
+- Supervision order: Repo → Vault → RateLimitStore → Oban → PublisherPool → MetadataPipeline → Endpoint. ✓
+- Cron/scheduler: string keys in all perform heads; unique idempotency guards on all 4 workers. ✓
+- Money types: all budget columns are `_cents` integers; `parse_budget/1` rounds Meta API floats. ✓
+- Query safety: all user values pinned with `^`; no string interpolation in Ecto queries. ✓
+- Third-party wrapping: Meta.Client, AMQP.Basic, PublisherPool all behind project-owned behaviours. ✓

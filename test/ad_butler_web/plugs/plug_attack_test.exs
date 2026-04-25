@@ -2,7 +2,12 @@ defmodule AdButlerWeb.PlugAttackTest do
   use AdButlerWeb.ConnCase, async: false
 
   # PlugAttack ETS table is process-global; async: false prevents cross-test interference.
-  # Each test uses a unique IP to avoid bucket collisions across test runs.
+  # Flushing the ETS table before each test guarantees a clean bucket regardless of
+  # prior runs, so unique IPs are belt-and-suspenders rather than load-bearing.
+  setup do
+    :ets.delete_all_objects(:plug_attack_storage)
+    :ok
+  end
 
   defp conn_with_ip(ip_tuple) do
     build_conn(:get, "/auth/meta/callback")
@@ -10,12 +15,12 @@ defmodule AdButlerWeb.PlugAttackTest do
   end
 
   describe "oauth rate limit" do
-    test "first 10 requests from same IP are allowed" do
+    test "first 3 requests from same IP are allowed" do
       {a, b, c, d} = {10, unique_octet(), 0, 1}
       ip = {a, b, c, d}
 
       results =
-        for _i <- 1..10 do
+        for _i <- 1..3 do
           conn = AdButlerWeb.PlugAttack.call(conn_with_ip(ip), [])
           conn.halted
         end
@@ -23,11 +28,11 @@ defmodule AdButlerWeb.PlugAttackTest do
       assert Enum.all?(results, &(&1 == false))
     end
 
-    test "11th request from same IP is blocked" do
+    test "4th request from same IP is blocked" do
       {a, b, c, d} = {10, unique_octet(), 0, 2}
       ip = {a, b, c, d}
 
-      for _i <- 1..10 do
+      for _i <- 1..3 do
         AdButlerWeb.PlugAttack.call(conn_with_ip(ip), [])
       end
 
@@ -59,9 +64,9 @@ defmodule AdButlerWeb.PlugAttackTest do
         conn_with_ip({127, 0, 0, 1})
         |> Plug.Conn.put_req_header("fly-client-ip", fly_ip)
 
-      for _i <- 1..10, do: AdButlerWeb.PlugAttack.call(conn_with_fly, [])
+      for _i <- 1..3, do: AdButlerWeb.PlugAttack.call(conn_with_fly, [])
 
-      # 11th with same fly IP is blocked
+      # 4th with same fly IP is blocked
       assert AdButlerWeb.PlugAttack.call(conn_with_fly, []).halted
 
       # Same remote_ip but NO fly header → different bucket, not blocked
@@ -77,13 +82,14 @@ defmodule AdButlerWeb.PlugAttackTest do
         conn
         |> Plug.Conn.put_req_header("fly-client-ip", "not-an-ip-address")
 
-      for _i <- 1..10, do: AdButlerWeb.PlugAttack.call(conn_spoofed, [])
+      for _i <- 1..3, do: AdButlerWeb.PlugAttack.call(conn_spoofed, [])
 
-      # 11th from the same remote_ip is blocked — header was ignored, key = remote_ip
+      # 4th from the same remote_ip is blocked — header was ignored, key = remote_ip
       assert AdButlerWeb.PlugAttack.call(conn, []).halted
     end
   end
 
+  # For readability only — test isolation is guaranteed by the ETS flush in setup above.
   defp unique_octet do
     rem(System.unique_integer([:positive]), 250) + 1
   end

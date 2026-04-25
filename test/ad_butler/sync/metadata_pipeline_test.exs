@@ -4,6 +4,8 @@ defmodule AdButler.Sync.MetadataPipelineTest do
   import AdButler.Factory
   import Mox
 
+  import ExUnit.CaptureLog
+
   alias AdButler.{Ads, Repo}
   alias AdButler.Sync.MetadataPipeline
 
@@ -205,6 +207,54 @@ defmodule AdButler.Sync.MetadataPipelineTest do
       ref = Broadway.test_message(MetadataPipeline, payload)
 
       assert_receive {:ack, ^ref, [], [_failed]}, 2_000
+    end
+
+    test "list_ads returns {:error, :unauthorized} → message failed" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+
+      expect(AdButler.Meta.ClientMock, :list_campaigns, fn _, _, _ ->
+        {:ok,
+         [%{"id" => "c1", "name" => "C", "status" => "ACTIVE", "objective" => "OUTCOME_TRAFFIC"}]}
+      end)
+
+      expect(AdButler.Meta.ClientMock, :list_ad_sets, fn _, _, _ -> {:ok, []} end)
+
+      expect(AdButler.Meta.ClientMock, :list_ads, fn _, _, _ ->
+        {:error, :unauthorized}
+      end)
+
+      payload = Jason.encode!(%{ad_account_id: ad_account.id, sync_type: "full"})
+      ref = Broadway.test_message(MetadataPipeline, payload)
+
+      assert_receive {:ack, ^ref, [], [_failed]}, 2_000
+    end
+
+    test "list_ads returns {:error, :rate_limit_exceeded} → message failed and warning logged" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+
+      expect(AdButler.Meta.ClientMock, :list_campaigns, fn _, _, _ ->
+        {:ok,
+         [%{"id" => "c1", "name" => "C", "status" => "ACTIVE", "objective" => "OUTCOME_TRAFFIC"}]}
+      end)
+
+      expect(AdButler.Meta.ClientMock, :list_ad_sets, fn _, _, _ -> {:ok, []} end)
+
+      expect(AdButler.Meta.ClientMock, :list_ads, fn _, _, _ ->
+        {:error, :rate_limit_exceeded}
+      end)
+
+      payload = Jason.encode!(%{ad_account_id: ad_account.id, sync_type: "full"})
+
+      log =
+        capture_log(fn ->
+          ref = Broadway.test_message(MetadataPipeline, payload)
+          assert_receive {:ack, ^ref, [], [_failed]}, 2_000
+        end)
+
+      assert log =~ "Rate limit hit during metadata sync"
+      assert Repo.aggregate(AdButler.Ads.Ad, :count) == 0
     end
   end
 

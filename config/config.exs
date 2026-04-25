@@ -88,7 +88,10 @@ config :logger, :default_formatter,
     :meta_ids,
     :attempts_left,
     :limit,
-    :errors
+    :errors,
+    :meta_connection_ids,
+    :newly_enqueued,
+    :skipped
   ]
 
 # Use Jason for JSON parsing in Phoenix
