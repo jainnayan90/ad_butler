@@ -1,6 +1,6 @@
 defmodule AdButler.Meta.Client do
   @moduledoc """
-  HTTP client for the Meta (Facebook) Graph API v19.0.
+  HTTP client for the Meta (Facebook) Graph API v23.0.
 
   Implements `AdButler.Meta.ClientBehaviour` so the module can be swapped out
   with a mock in tests via `Application.put_env(:ad_butler, :meta_client, ...)`.
@@ -11,7 +11,7 @@ defmodule AdButler.Meta.Client do
 
   require Logger
 
-  @graph_api_base "https://graph.facebook.com/v19.0"
+  @graph_api_base "https://graph.facebook.com/v23.0"
   @rate_limit_table :meta_rate_limits
   @meta_long_lived_token_ttl_seconds 60 * 24 * 60 * 60
 
@@ -19,7 +19,7 @@ defmodule AdButler.Meta.Client do
   @spec list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_accounts(access_token) do
     make_request(:get, "#{@graph_api_base}/me/adaccounts",
-      params: [fields: "id,name,currency,timezone_name,account_status"],
+      params: [fields: "id,name,currency,timezone_name,account_status,business"],
       headers: auth_header(access_token)
     )
   end

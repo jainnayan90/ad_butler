@@ -2,10 +2,10 @@ defmodule AdButlerWeb.CampaignsLive do
   @moduledoc """
   LiveView for browsing and filtering campaigns.
 
-  Streams campaigns for the authenticated user. Campaigns are loaded in
-  `handle_params/3` (not `mount/3`) so URL filter params are honoured on
-  both initial load and navigation. Filters push a `patch` so the URL stays
-  in sync with the current view state.
+  Streams a paginated page of campaigns for the authenticated user. Campaigns are
+  loaded in `handle_params/3` (not `mount/3`) so URL filter and page params are
+  honoured on both initial load and navigation. Filters and pagination push a
+  `patch` so the URL stays in sync with the current view state.
 
   Authentication is enforced via `AdButlerWeb.AuthLive` on_mount hook.
   `current_user` is always present when this LiveView runs.
@@ -16,6 +16,7 @@ defmodule AdButlerWeb.CampaignsLive do
   alias AdButler.Ads
   alias AdButlerWeb.DashboardComponents
 
+  @per_page 50
   @valid_statuses ~w(ACTIVE PAUSED DELETED)
 
   @impl true
@@ -27,11 +28,12 @@ defmodule AdButlerWeb.CampaignsLive do
     socket =
       socket
       |> stream(:campaigns, [])
-      |> stream(:ad_accounts, [])
       |> assign(:selected_ad_account, nil)
       |> assign(:selected_status, nil)
       |> assign(:ad_accounts_list, [])
       |> assign(:campaign_count, 0)
+      |> assign(:page, 1)
+      |> assign(:total_pages, 1)
 
     {:ok, socket}
   end
@@ -42,16 +44,18 @@ defmodule AdButlerWeb.CampaignsLive do
 
     ad_account_id = params["ad_account_id"]
     status = params["status"]
+    page = parse_page(params["page"])
 
     opts =
       []
       |> maybe_put(:ad_account_id, ad_account_id)
       |> maybe_put(:status, status)
+      |> Keyword.put(:page, page)
+      |> Keyword.put(:per_page, @per_page)
 
-    campaigns = Ads.list_campaigns(current_user, opts)
+    {campaigns, total} = Ads.paginate_campaigns(current_user, opts)
+    total_pages = max(1, ceil(total / @per_page))
 
-    # Load ad accounts on the first handle_params call (list empty from mount).
-    # Subsequent filter navigations reuse the cached list — no re-fetch needed.
     ad_accounts =
       case socket.assigns.ad_accounts_list do
         [] -> Ads.list_ad_accounts(current_user)
@@ -63,7 +67,9 @@ defmodule AdButlerWeb.CampaignsLive do
       |> stream(:campaigns, campaigns, reset: true)
       |> assign(:selected_ad_account, ad_account_id)
       |> assign(:selected_status, status)
-      |> assign(:campaign_count, length(campaigns))
+      |> assign(:campaign_count, total)
+      |> assign(:page, page)
+      |> assign(:total_pages, total_pages)
       |> assign(:ad_accounts_list, ad_accounts)
 
     {:noreply, socket}
@@ -77,6 +83,17 @@ defmodule AdButlerWeb.CampaignsLive do
       %{}
       |> maybe_put("ad_account_id", params["ad_account_id"])
       |> maybe_put("status", status)
+
+    {:noreply, push_patch(socket, to: ~p"/campaigns?#{query}")}
+  end
+
+  @impl true
+  def handle_event("paginate", %{"page" => page}, socket) do
+    query =
+      %{}
+      |> maybe_put("ad_account_id", socket.assigns.selected_ad_account)
+      |> maybe_put("status", socket.assigns.selected_status)
+      |> Map.put("page", page)
 
     {:noreply, push_patch(socket, to: ~p"/campaigns?#{query}")}
   end
@@ -126,7 +143,7 @@ defmodule AdButlerWeb.CampaignsLive do
             <label class="block text-sm font-medium text-gray-700 mb-1">Ad Account</label>
             <select
               name="ad_account_id"
-              class="block w-48 rounded-md border-gray-300 shadow-sm text-sm"
+              class="block w-48 rounded-md border border-gray-300 bg-white py-2 pl-3 pr-3 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="">All accounts</option>
               <option
@@ -141,7 +158,10 @@ defmodule AdButlerWeb.CampaignsLive do
 
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
-            <select name="status" class="block w-36 rounded-md border-gray-300 shadow-sm text-sm">
+            <select
+              name="status"
+              class="block w-36 rounded-md border border-gray-300 bg-white py-2 pl-3 pr-3 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
               <option value="">All statuses</option>
               <option value="ACTIVE" selected={@selected_status == "ACTIVE"}>Active</option>
               <option value="PAUSED" selected={@selected_status == "PAUSED"}>Paused</option>
@@ -165,6 +185,7 @@ defmodule AdButlerWeb.CampaignsLive do
                 </span>
               </:col>
             </.table>
+            <.pagination page={@page} total_pages={@total_pages} />
           </div>
         </div>
       </main>
@@ -192,19 +213,25 @@ defmodule AdButlerWeb.CampaignsLive do
       []
       |> maybe_put(:ad_account_id, socket.assigns.selected_ad_account)
       |> maybe_put(:status, socket.assigns.selected_status)
+      |> Keyword.put(:page, socket.assigns.page)
+      |> Keyword.put(:per_page, @per_page)
 
-    campaigns = Ads.list_campaigns(current_user, opts)
+    {campaigns, total} = Ads.paginate_campaigns(current_user, opts)
+    total_pages = max(1, ceil(total / @per_page))
     ad_accounts = Ads.list_ad_accounts(current_user)
 
     socket =
       socket
       |> stream(:campaigns, campaigns, reset: true)
-      |> stream(:ad_accounts, ad_accounts, reset: true)
       |> assign(:ad_accounts_list, ad_accounts)
-      |> assign(:campaign_count, length(campaigns))
+      |> assign(:campaign_count, total)
+      |> assign(:total_pages, total_pages)
 
     {:noreply, socket}
   end
+
+  defp parse_page(nil), do: 1
+  defp parse_page(p) when is_binary(p), do: max(1, String.to_integer(p))
 
   defp maybe_put(acc, _key, nil), do: acc
   defp maybe_put(acc, _key, ""), do: acc

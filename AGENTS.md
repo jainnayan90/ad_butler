@@ -36,6 +36,29 @@ custom classes must fully style the input
   - You must import the vendor deps into app.js and app.css to use them
   - **Never write inline <script>custom js</script> tags within templates**
 
+### Pagination guidelines
+
+- **All LiveViews that render lists must use pagination by default** — no unbounded list rendering.
+- Use context-level `paginate_*` functions (e.g. `Ads.paginate_campaigns/2`) that return `{items, total_count}`.
+- Track `:page` and `:total_pages` as socket assigns; read `:page` from URL params in `handle_params/3`.
+- Handle a `"paginate"` event with `push_patch` to keep the URL in sync:
+  ```elixir
+  def handle_event("paginate", %{"page" => page}, socket) do
+    {:noreply, push_patch(socket, to: ~p"/campaigns?page=#{page}")}
+  end
+  ```
+- Always render `<.pagination page={@page} total_pages={@total_pages} />` below every table.
+
+### CSS/Styling guidelines
+
+- **Never use DaisyUI component classes** (`table`, `table-zebra`, `btn`, `select`, `input`, `textarea`,
+  `checkbox`, `badge`, `card`, `alert`, `toast`, `menu`, `tab`, `collapse`, `tooltip`, etc.).
+  DaisyUI component classes use CSS variables that shift with the active theme — they clash with
+  the hard-coded Tailwind utility classes (`bg-white`, `bg-gray-50`) used for page layout.
+- The DaisyUI **theme** configuration in `assets/css/app.css` (color variable definitions) is fine to keep.
+  Only the component classes are banned.
+- **Always write plain Tailwind utility classes** for all markup.
+
 ### UI/UX & design guidelines
 
 - **Produce world-class UI designs** with a focus on usability, aesthetics, and modern design principles

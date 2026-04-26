@@ -206,8 +206,8 @@ defmodule AdButlerWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
-      <label>
+    <div class="mb-4">
+      <label class="flex items-center gap-2 cursor-pointer">
         <input
           type="hidden"
           name={@name}
@@ -215,17 +215,16 @@ defmodule AdButlerWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
-          <input
-            type="checkbox"
-            id={@id}
-            name={@name}
-            value="true"
-            checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
-            {@rest}
-          />{@label}
-        </span>
+        <input
+          type="checkbox"
+          id={@id}
+          name={@name}
+          value="true"
+          checked={@checked}
+          class={@class || "h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"}
+          {@rest}
+        />
+        <span :if={@label} class="text-sm font-medium text-gray-700">{@label}</span>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
@@ -234,20 +233,24 @@ defmodule AdButlerWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <select
-          id={@id}
-          name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
-          multiple={@multiple}
-          {@rest}
-        >
-          <option :if={@prompt} value="">{@prompt}</option>
-          {Phoenix.HTML.Form.options_for_select(@options, @value)}
-        </select>
+    <div class="mb-4">
+      <label :if={@label} for={@id} class="block text-sm font-medium text-gray-700 mb-1">
+        {@label}
       </label>
+      <select
+        id={@id}
+        name={@name}
+        class={[
+          @class ||
+            "block w-full rounded-md border border-gray-300 bg-white py-2 pl-3 pr-3 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500",
+          @errors != [] && (@error_class || "border-red-500 focus:border-red-500 focus:ring-red-500")
+        ]}
+        multiple={@multiple}
+        {@rest}
+      >
+        <option :if={@prompt} value="">{@prompt}</option>
+        {Phoenix.HTML.Form.options_for_select(@options, @value)}
+      </select>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -255,19 +258,21 @@ defmodule AdButlerWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <textarea
-          id={@id}
-          name={@name}
-          class={[
-            @class || "w-full textarea",
-            @errors != [] && (@error_class || "textarea-error")
-          ]}
-          {@rest}
-        >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
+    <div class="mb-4">
+      <label :if={@label} for={@id} class="block text-sm font-medium text-gray-700 mb-1">
+        {@label}
       </label>
+      <textarea
+        id={@id}
+        name={@name}
+        class={[
+          @class ||
+            "block w-full rounded-md border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500",
+          @errors != [] &&
+            (@error_class || "border-red-500 focus:border-red-500 focus:ring-red-500")
+        ]}
+        {@rest}
+      >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -276,21 +281,23 @@ defmodule AdButlerWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <input
-          type={@type}
-          name={@name}
-          id={@id}
-          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-          class={[
-            @class || "w-full input",
-            @errors != [] && (@error_class || "input-error")
-          ]}
-          {@rest}
-        />
+    <div class="mb-4">
+      <label :if={@label} for={@id} class="block text-sm font-medium text-gray-700 mb-1">
+        {@label}
       </label>
+      <input
+        type={@type}
+        name={@name}
+        id={@id}
+        value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+        class={[
+          @class ||
+            "block w-full rounded-md border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500",
+          @errors != [] &&
+            (@error_class || "border-red-500 focus:border-red-500 focus:ring-red-500")
+        ]}
+        {@rest}
+      />
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -299,8 +306,8 @@ defmodule AdButlerWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1.5 flex gap-2 items-center text-sm text-red-600">
+      <.icon name="hero-exclamation-circle" class="size-5 shrink-0" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -326,6 +333,53 @@ defmodule AdButlerWeb.CoreComponents do
       </div>
       <div class="flex-none">{render_slot(@actions)}</div>
     </header>
+    """
+  end
+
+  @doc """
+  Renders a pagination bar for navigating paged lists.
+
+  Emits `phx-click="paginate"` events with `%{"page" => page}` params so the
+  parent LiveView can call `push_patch` to update the URL. The bar is hidden
+  when there is only one page.
+
+  ## Examples
+
+      <.pagination page={@page} total_pages={@total_pages} />
+  """
+  attr :page, :integer, required: true, doc: "current 1-based page number"
+  attr :total_pages, :integer, required: true, doc: "total number of pages"
+
+  def pagination(%{total_pages: 1} = assigns), do: ~H""
+
+  def pagination(assigns) do
+    ~H"""
+    <div class="flex items-center justify-between border-t border-gray-200 bg-white px-6 py-3">
+      <p class="text-sm text-gray-700">
+        Page <span class="font-medium">{@page}</span>
+        of <span class="font-medium">{@total_pages}</span>
+      </p>
+      <div class="flex gap-2">
+        <button
+          type="button"
+          phx-click="paginate"
+          phx-value-page={@page - 1}
+          disabled={@page <= 1}
+          class="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          ← Prev
+        </button>
+        <button
+          type="button"
+          phx-click="paginate"
+          phx-value-page={@page + 1}
+          disabled={@page >= @total_pages}
+          class="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
     """
   end
 
@@ -361,34 +415,48 @@ defmodule AdButlerWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
-      <thead>
-        <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
-          <th :if={@action != []}>
-            <span class="sr-only">{gettext("Actions")}</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
-          <td
-            :for={col <- @col}
-            phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
-          >
-            {render_slot(col, @row_item.(row))}
-          </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
-              <%= for action <- @action do %>
-                {render_slot(action, @row_item.(row))}
-              <% end %>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th
+              :for={col <- @col}
+              class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+            >
+              {col[:label]}
+            </th>
+            <th :if={@action != []} class="relative px-6 py-3">
+              <span class="sr-only">{gettext("Actions")}</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody
+          id={@id}
+          class="bg-white divide-y divide-gray-200"
+          phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}
+        >
+          <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class="hover:bg-gray-50">
+            <td
+              :for={col <- @col}
+              phx-click={@row_click && @row_click.(row)}
+              class={[
+                "px-6 py-4 text-sm text-gray-900",
+                @row_click && "cursor-pointer"
+              ]}
+            >
+              {render_slot(col, @row_item.(row))}
+            </td>
+            <td :if={@action != []} class="px-6 py-4 text-sm font-semibold whitespace-nowrap">
+              <div class="flex gap-4">
+                <%= for action <- @action do %>
+                  {render_slot(action, @row_item.(row))}
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     """
   end
 
@@ -408,11 +476,11 @@ defmodule AdButlerWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="list">
-      <li :for={item <- @item} class="list-row">
-        <div class="list-col-grow">
-          <div class="font-bold">{item.title}</div>
-          <div>{render_slot(item)}</div>
+    <ul class="divide-y divide-gray-200">
+      <li :for={item <- @item} class="py-4">
+        <div class="flex flex-col gap-1">
+          <div class="text-sm font-medium text-gray-900">{item.title}</div>
+          <div class="text-sm text-gray-500">{render_slot(item)}</div>
         </div>
       </li>
     </ul>

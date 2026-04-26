@@ -616,7 +616,7 @@ defmodule AdButlerWeb.AuthController do
   end
   
   defp fetch_user_info(access_token) do
-    url = "https://graph.facebook.com/v19.0/me"
+    url = "https://graph.facebook.com/v23.0/me"
     params = [access_token: access_token, fields: "id,name,email"]
     
     case Req.get(url, params: params) do
@@ -768,7 +768,7 @@ defmodule AdButler.Meta.Client do
   
   @behaviour AdButler.Meta.ClientBehaviour
   
-  @graph_api_base "https://graph.facebook.com/v19.0"
+  @graph_api_base "https://graph.facebook.com/v23.0"
   @rate_limit_table :meta_rate_limits
   
   require Logger
@@ -2496,7 +2496,7 @@ end
 **Project Documentation:**
 - `docs/plan/decisions/0001-skip-rls-for-mvp.md` — scope/2 discipline
 - `docs/plan/decisions/0003-claude-via-reqllm.md` — LLM integration
-- `CODING_PRINCIPLES.md` — 23 sections of development standards
+- `CLAUDE.md` — coding principles and agent-facing development standards
 
 ---
 

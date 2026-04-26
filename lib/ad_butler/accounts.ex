@@ -34,7 +34,8 @@ defmodule AdButler.Accounts do
             meta_user_id: user_info[:meta_user_id],
             access_token: token,
             token_expires_at: DateTime.add(DateTime.utc_now(), expires_in, :second),
-            scopes: ["ads_read", "ads_management"]
+            scopes: ["ads_read", "ads_management"],
+            status: "active"
           })
         end)
         |> Repo.transaction()
@@ -100,7 +101,7 @@ defmodule AdButler.Accounts do
     %MetaConnection{user_id: user.id}
     |> MetaConnection.changeset(attrs)
     |> Repo.insert(
-      on_conflict: {:replace, [:access_token, :token_expires_at, :scopes, :updated_at]},
+      on_conflict: {:replace, [:access_token, :token_expires_at, :scopes, :status, :updated_at]},
       conflict_target: [:user_id, :meta_user_id],
       returning: true
     )

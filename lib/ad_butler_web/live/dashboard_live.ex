@@ -2,9 +2,9 @@ defmodule AdButlerWeb.DashboardLive do
   @moduledoc """
   LiveView for the authenticated user dashboard.
 
-  Streams all `AdAccount` records accessible to the current user. Displays
-  a stat card with the total account count, an ad account table, and an empty
-  state with a "Connect Meta Account" link when no accounts exist.
+  Streams a paginated page of `AdAccount` records for the current user. Displays
+  a stat card with the total account count, an ad account table with pagination,
+  and an empty state with a "Connect Meta Account" link when no accounts exist.
 
   Authentication is enforced via the `AdButlerWeb.AuthLive` on_mount hook
   wired in the `live_session :authenticated` router block — `current_user`
@@ -16,17 +16,11 @@ defmodule AdButlerWeb.DashboardLive do
   alias AdButler.Ads
   alias AdButlerWeb.DashboardComponents
 
+  @per_page 50
+
   @impl true
   def handle_info(:reload_on_reconnect, socket) do
-    current_user = socket.assigns.current_user
-    ad_accounts = Ads.list_ad_accounts(current_user)
-
-    socket =
-      socket
-      |> stream(:ad_accounts, ad_accounts, reset: true)
-      |> assign(:ad_account_count, length(ad_accounts))
-
-    {:noreply, socket}
+    {:noreply, load_page(socket, socket.assigns.page)}
   end
 
   @impl true
@@ -35,7 +29,25 @@ defmodule AdButlerWeb.DashboardLive do
       send(self(), :reload_on_reconnect)
     end
 
-    {:ok, socket |> stream(:ad_accounts, []) |> assign(:ad_account_count, 0)}
+    socket =
+      socket
+      |> stream(:ad_accounts, [])
+      |> assign(:ad_account_count, 0)
+      |> assign(:page, 1)
+      |> assign(:total_pages, 1)
+
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    page = parse_page(params["page"])
+    {:noreply, load_page(socket, page)}
+  end
+
+  @impl true
+  def handle_event("paginate", %{"page" => page}, socket) do
+    {:noreply, push_patch(socket, to: ~p"/dashboard?page=#{page}")}
   end
 
   @impl true
@@ -91,6 +103,7 @@ defmodule AdButlerWeb.DashboardLive do
           <div :if={@ad_account_count > 0}>
             <.table id="ad-accounts" rows={@streams.ad_accounts}>
               <:col :let={{_id, aa}} label="Name">{aa.name}</:col>
+              <:col :let={{_id, aa}} label="Business">{aa.bm_name || "—"}</:col>
               <:col :let={{_id, aa}} label="Currency">{aa.currency}</:col>
               <:col :let={{_id, aa}} label="Timezone">{aa.timezone_name}</:col>
               <:col :let={{_id, aa}} label="Status">
@@ -99,6 +112,7 @@ defmodule AdButlerWeb.DashboardLive do
                 </span>
               </:col>
             </.table>
+            <.pagination page={@page} total_pages={@total_pages} />
           </div>
         </div>
 
@@ -111,6 +125,21 @@ defmodule AdButlerWeb.DashboardLive do
     </div>
     """
   end
+
+  defp load_page(socket, page) do
+    current_user = socket.assigns.current_user
+    {ad_accounts, total} = Ads.paginate_ad_accounts(current_user, page: page, per_page: @per_page)
+    total_pages = max(1, ceil(total / @per_page))
+
+    socket
+    |> stream(:ad_accounts, ad_accounts, reset: true)
+    |> assign(:ad_account_count, total)
+    |> assign(:page, page)
+    |> assign(:total_pages, total_pages)
+  end
+
+  defp parse_page(nil), do: 1
+  defp parse_page(p) when is_binary(p), do: max(1, String.to_integer(p))
 
   defp status_class("ACTIVE"),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"
