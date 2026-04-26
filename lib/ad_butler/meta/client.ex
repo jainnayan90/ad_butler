@@ -182,15 +182,15 @@ defmodule AdButler.Meta.Client do
     case Req.get(
            "#{@graph_api_base}/me",
            req_options() ++
-             [params: [fields: "id,name,email"], headers: auth_header(access_token)]
+             [params: [fields: "id,name"], headers: auth_header(access_token)]
          ) do
-      {:ok, %{status: 200, body: %{"id" => id} = body}} ->
-        {:ok,
-         %{
-           email: body["email"],
-           name: body["name"],
-           meta_user_id: id
-         }}
+      {:ok, %{status: 200, body: body}} ->
+        parsed = if is_binary(body), do: Jason.decode!(body), else: body
+
+        case parsed do
+          %{"id" => id} -> {:ok, %{name: parsed["name"], meta_user_id: id}}
+          _ -> {:error, {:user_info_failed, parsed}}
+        end
 
       {:ok, %{body: body}} ->
         {:error, {:user_info_failed, body}}
@@ -212,13 +212,14 @@ defmodule AdButler.Meta.Client do
     case Req.request(
            req_options() ++ [method: method, url: url, headers: headers, params: params]
          ) do
-      {:ok, %{status: 200, body: %{"data" => data}} = resp} ->
+      {:ok, %{status: 200} = resp} ->
+        body = decode_body(resp.body)
         parse_rate_limit_header(resp, ad_account_id)
-        {:ok, data}
 
-      {:ok, %{status: 200, body: body} = resp} ->
-        parse_rate_limit_header(resp, ad_account_id)
-        {:ok, body}
+        case body do
+          %{"data" => data} -> {:ok, data}
+          other -> {:ok, other}
+        end
 
       {:ok, resp} ->
         {:error, handle_error(resp)}
@@ -230,6 +231,15 @@ defmodule AdButler.Meta.Client do
         {:error, reason}
     end
   end
+
+  defp decode_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> body
+    end
+  end
+
+  defp decode_body(body), do: body
 
   defp handle_error(%{status: 400, body: %{"error" => %{"message" => msg}}}),
     do: {:bad_request, msg}

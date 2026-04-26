@@ -34,7 +34,7 @@ defmodule AdButler.Accounts do
             meta_user_id: user_info[:meta_user_id],
             access_token: token,
             token_expires_at: DateTime.add(DateTime.utc_now(), expires_in, :second),
-            scopes: ["ads_read", "ads_management", "email"]
+            scopes: ["ads_read", "ads_management"]
           })
         end)
         |> Repo.transaction()

@@ -14,6 +14,10 @@ ENV MIX_ENV=dev
 COPY mix.exs mix.lock ./
 RUN mix deps.get
 
+# Install Tailwind and esbuild binaries so the phx.server watchers can find them.
+# assets.setup is idempotent — safe to re-run on rebuild.
+RUN mix assets.setup
+
 EXPOSE 4000
 
 # On startup: sync any new deps, create/migrate the DB, then start the server.

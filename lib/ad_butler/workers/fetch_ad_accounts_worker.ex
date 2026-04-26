@@ -97,23 +97,34 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.warning("Failed to sync ad account",
+        Logger.warning("Failed to sync ad account reason=#{inspect(reason)}",
           meta_connection_id: connection.id,
-          meta_id: account["id"],
-          reason: ErrorHelpers.safe_reason(reason)
+          meta_id: account["id"]
         )
 
         {:error, reason}
     end
   end
 
+  # Meta account_status values: 1=ACTIVE, 2=DISABLED, 3=UNSETTLED, 101=CLOSED
+  @account_status_map %{1 => "ACTIVE", 2 => "DISABLED", 3 => "UNSETTLED", 101 => "CLOSED"}
+
   defp build_ad_account_attrs(account) do
+    raw_status = account["account_status"] || account["status"]
+
+    status =
+      cond do
+        is_integer(raw_status) -> Map.get(@account_status_map, raw_status, "UNKNOWN")
+        is_binary(raw_status) -> raw_status
+        true -> "UNKNOWN"
+      end
+
     %{
       meta_id: account["id"],
       name: account["name"],
       currency: account["currency"],
       timezone_name: account["timezone_name"],
-      status: account["account_status"] || account["status"],
+      status: status,
       last_synced_at: DateTime.utc_now(),
       raw_jsonb: account
     }
