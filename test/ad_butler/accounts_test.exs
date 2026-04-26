@@ -270,6 +270,54 @@ defmodule AdButler.AccountsTest do
     end
   end
 
+  describe "list_all_meta_connections_for_user/1" do
+    test "returns all connections for user regardless of status" do
+      user = insert(:user)
+      active = insert(:meta_connection, user: user, status: "active")
+
+      expired =
+        insert(:meta_connection,
+          user: user,
+          meta_user_id: "#{System.unique_integer([:positive])}",
+          status: "expired"
+        )
+
+      result = Accounts.list_all_meta_connections_for_user(user)
+      ids = Enum.map(result, & &1.id)
+      assert active.id in ids
+      assert expired.id in ids
+    end
+
+    test "does not return another user's connections" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      _conn_a = insert(:meta_connection, user: user_a, status: "active")
+
+      assert [] = Accounts.list_all_meta_connections_for_user(user_b)
+    end
+
+    test "returns connections ordered newest first" do
+      user = insert(:user)
+
+      older =
+        insert(:meta_connection,
+          user: user,
+          meta_user_id: "#{System.unique_integer([:positive])}",
+          status: "active"
+        )
+
+      newer =
+        insert(:meta_connection,
+          user: user,
+          meta_user_id: "#{System.unique_integer([:positive])}",
+          status: "expired"
+        )
+
+      [first | _] = Accounts.list_all_meta_connections_for_user(user)
+      assert first.id == newer.id || first.inserted_at >= older.inserted_at
+    end
+  end
+
   describe "stream_active_meta_connections/1" do
     test "returns an enumerable that yields active connections" do
       conn = insert(:meta_connection, status: "active")

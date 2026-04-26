@@ -12,63 +12,139 @@ defmodule AdButlerWeb.Layouts do
   embed_templates "layouts/*"
 
   @doc """
-  Renders your app layout.
+  Renders the app layout.
 
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
+  When `current_user` is present, renders a collapsible left sidebar with navigation
+  and a main content area. When nil, renders a bare wrapper for unauthenticated pages.
 
   ## Examples
 
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
-      </Layouts.app>
+      <Layouts.app flash={@flash} current_user={@current_user} active_nav={:campaigns} />
 
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
+  attr :current_user, :any, default: nil
+  attr :active_nav, :atom, default: nil
 
   attr :current_scope, :map,
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
-  slot :inner_block, required: true
-
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </header>
+    <%= if @current_user do %>
+      <div class="flex h-screen overflow-hidden bg-gray-50">
+        <aside
+          id="app-sidebar"
+          class="relative flex flex-col w-64 [&.collapsed]:w-16 transition-[width] duration-200 overflow-hidden bg-white border-r border-gray-200 shrink-0"
+        >
+          <div class="flex items-center h-16 px-4 border-b border-gray-200 shrink-0">
+            <span class="text-lg font-bold text-gray-900 whitespace-nowrap [.collapsed_&]:hidden">
+              AdButler
+            </span>
+            <span class="hidden text-lg font-bold text-gray-900 [.collapsed_&]:block">A</span>
+          </div>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
-        {render_slot(@inner_block)}
-      </div>
-    </main>
+          <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
+            <.nav_item
+              href={~p"/connections"}
+              icon="hero-link"
+              label="Connections"
+              active={@active_nav == :connections}
+            />
+            <.nav_item
+              href={~p"/ad-accounts"}
+              icon="hero-credit-card"
+              label="Ad Accounts"
+              active={@active_nav == :ad_accounts}
+            />
+            <.nav_item
+              href={~p"/campaigns"}
+              icon="hero-megaphone"
+              label="Campaigns"
+              active={@active_nav == :campaigns}
+            />
+            <.nav_item
+              href={~p"/ad-sets"}
+              icon="hero-rectangle-stack"
+              label="Ad Sets"
+              active={@active_nav == :ad_sets}
+            />
+            <.nav_item
+              href={~p"/ads"}
+              icon="hero-photo"
+              label="Ads"
+              active={@active_nav == :ads}
+            />
+          </nav>
 
-    <.flash_group flash={@flash} />
+          <div class="shrink-0 px-3 py-4 border-t border-gray-200">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="flex items-center justify-center size-8 rounded-full bg-blue-600 text-white text-sm font-medium shrink-0">
+                {String.first(@current_user.email || @current_user.name || "?")}
+              </div>
+              <div class="min-w-0 [.collapsed_&]:hidden">
+                <p class="text-sm font-medium text-gray-900 truncate">{@current_user.email}</p>
+              </div>
+            </div>
+            <.link
+              method="delete"
+              href={~p"/auth/logout"}
+              class="mt-3 flex items-center gap-2 text-sm text-red-600 hover:text-red-800 whitespace-nowrap [.collapsed_&]:hidden"
+            >
+              <.icon name="hero-arrow-right-on-rectangle" class="size-4" /> Logout
+            </.link>
+          </div>
+
+          <button
+            class="absolute top-4 -right-3 z-10 flex items-center justify-center size-6 rounded-full bg-white border border-gray-300 shadow-sm hover:bg-gray-50"
+            phx-click={JS.toggle_class("collapsed", to: "#app-sidebar")}
+            aria-label="Toggle sidebar"
+          >
+            <.icon
+              name="hero-chevron-left"
+              class="size-3 text-gray-600 transition-transform [.collapsed_&]:rotate-180"
+            />
+          </button>
+        </aside>
+
+        <div class="flex flex-col flex-1 min-w-0 overflow-y-auto">
+          <.flash_group flash={@flash} />
+          <main class="flex-1 px-6 py-6">
+            {@inner_content}
+          </main>
+        </div>
+      </div>
+    <% else %>
+      <main class="px-4 py-20 sm:px-6 lg:px-8">
+        <div class="mx-auto max-w-2xl space-y-4">
+          <.flash_group flash={@flash} />
+          {@inner_content}
+        </div>
+      </main>
+    <% end %>
+    """
+  end
+
+  @doc false
+  attr :href, :string, required: true
+  attr :icon, :string, required: true
+  attr :label, :string, required: true
+  attr :active, :boolean, default: false
+
+  defp nav_item(assigns) do
+    ~H"""
+    <.link
+      navigate={@href}
+      class={[
+        "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap",
+        @active && "bg-blue-50 text-blue-700",
+        !@active && "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+      ]}
+    >
+      <.icon name={@icon} class="size-5 shrink-0" />
+      <span class="[.collapsed_&]:hidden">{@label}</span>
+    </.link>
     """
   end
 

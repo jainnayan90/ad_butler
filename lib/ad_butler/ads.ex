@@ -51,6 +51,31 @@ defmodule AdButler.Ads do
     |> Repo.all()
   end
 
+  @doc """
+  Returns a page of `AdAccount` records for `user` and the total count.
+
+  Options:
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_ad_accounts(User.t(), keyword()) :: {[AdAccount.t()], non_neg_integer()}
+  def paginate_ad_accounts(%User{} = user, opts \\ []) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base = scope_ad_account(AdAccount, mc_ids)
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
+  end
+
   @doc "Returns the `AdAccount` with `id` scoped to `user`. Raises if not found or not owned."
   @spec get_ad_account!(User.t(), binary()) :: AdAccount.t()
   def get_ad_account!(%User{} = user, id) do
@@ -80,7 +105,17 @@ defmodule AdButler.Ads do
     |> Repo.insert(
       on_conflict:
         {:replace,
-         [:name, :currency, :timezone_name, :status, :last_synced_at, :raw_jsonb, :updated_at]},
+         [
+           :name,
+           :currency,
+           :timezone_name,
+           :status,
+           :bm_id,
+           :bm_name,
+           :last_synced_at,
+           :raw_jsonb,
+           :updated_at
+         ]},
       conflict_target: [:meta_connection_id, :meta_id],
       returning: true
     )
@@ -147,6 +182,42 @@ defmodule AdButler.Ads do
     |> scope(mc_ids)
     |> apply_campaign_filters(opts)
     |> Repo.all()
+  end
+
+  @doc """
+  Returns a page of campaigns for `user` and the total count matching the filters.
+
+  Options (in addition to filter opts `:ad_account_id`, `:status`):
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_campaigns(User.t() | [binary()], keyword()) ::
+          {[Campaign.t()], non_neg_integer()}
+  def paginate_campaigns(user_or_mc_ids, opts \\ [])
+
+  def paginate_campaigns(%User{} = user, opts) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    paginate_campaigns(mc_ids, opts)
+  end
+
+  def paginate_campaigns(mc_ids, opts) when is_list(mc_ids) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      Campaign
+      |> scope(mc_ids)
+      |> apply_campaign_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
   end
 
   @doc "Returns the campaign with `id` scoped to `user`. Raises if not found or not owned."
@@ -244,6 +315,41 @@ defmodule AdButler.Ads do
     )
   end
 
+  @doc """
+  Returns a page of ad sets for `user` and the total count matching the filters.
+
+  Options (in addition to filter opts `:ad_account_id`, `:campaign_id`):
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_ad_sets(User.t() | [binary()], keyword()) :: {[AdSet.t()], non_neg_integer()}
+  def paginate_ad_sets(user_or_mc_ids, opts \\ [])
+
+  def paginate_ad_sets(%User{} = user, opts) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    paginate_ad_sets(mc_ids, opts)
+  end
+
+  def paginate_ad_sets(mc_ids, opts) when is_list(mc_ids) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      AdSet
+      |> scope(mc_ids)
+      |> apply_ad_set_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
+  end
+
   defp apply_ad_set_filters(queryable, opts) do
     Enum.reduce(opts, queryable, fn
       {:ad_account_id, id}, q -> where(q, [s], s.ad_account_id == ^id)
@@ -319,6 +425,41 @@ defmodule AdButler.Ads do
 
     entries = bulk_strip_and_filter(entries, schema)
     Repo.insert_all(schema, entries, insert_opts)
+  end
+
+  @doc """
+  Returns a page of ads for `user` and the total count matching the filters.
+
+  Options (in addition to filter opts `:ad_account_id`, `:ad_set_id`):
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_ads(User.t() | [binary()], keyword()) :: {[Ad.t()], non_neg_integer()}
+  def paginate_ads(user_or_mc_ids, opts \\ [])
+
+  def paginate_ads(%User{} = user, opts) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    paginate_ads(mc_ids, opts)
+  end
+
+  def paginate_ads(mc_ids, opts) when is_list(mc_ids) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      Ad
+      |> scope(mc_ids)
+      |> apply_ad_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
   end
 
   defp apply_ad_filters(queryable, opts) do

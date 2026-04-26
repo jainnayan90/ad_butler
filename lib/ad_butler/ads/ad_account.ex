@@ -18,6 +18,8 @@ defmodule AdButler.Ads.AdAccount do
     field :currency, :string
     field :timezone_name, :string
     field :status, :string
+    field :bm_id, :string
+    field :bm_name, :string
     field :last_synced_at, :utc_datetime_usec
     field :raw_jsonb, :map
 
@@ -32,7 +34,7 @@ defmodule AdButler.Ads.AdAccount do
   end
 
   @required [:meta_connection_id, :meta_id, :name, :currency, :timezone_name, :status]
-  @optional [:last_synced_at, :raw_jsonb]
+  @optional [:bm_id, :bm_name, :last_synced_at, :raw_jsonb]
 
   @doc "Builds a changeset for an ad account. Validates required fields and the `(meta_connection_id, meta_id)` uniqueness constraint."
   def changeset(ad_account, attrs) do

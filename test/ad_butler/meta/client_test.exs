@@ -142,6 +142,26 @@ defmodule AdButler.Meta.ClientTest do
   end
 
   describe "list_campaigns/3" do
+    test "follows paging.next and merges all pages into a single list" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        if conn.query_string =~ "after=cursor1" do
+          Req.Test.json(conn, %{"data" => [%{"id" => "camp_2"}]})
+        else
+          Req.Test.json(conn, %{
+            "data" => [%{"id" => "camp_1"}],
+            "paging" => %{
+              "next" =>
+                "https://graph.facebook.com/v23.0/act_123/campaigns?after=cursor1&fields=id"
+            }
+          })
+        end
+      end)
+
+      assert {:ok, results} = Client.list_campaigns("act_123", "token")
+      assert length(results) == 2
+      assert Enum.map(results, & &1["id"]) == ["camp_1", "camp_2"]
+    end
+
     test "200 with data returns {:ok, list}" do
       Req.Test.stub(AdButler.Meta.Client, fn conn ->
         Req.Test.json(conn, %{"data" => [%{"id" => "camp_1", "name" => "Campaign 1"}]})

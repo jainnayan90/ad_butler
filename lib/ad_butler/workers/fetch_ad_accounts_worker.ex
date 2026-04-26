@@ -119,12 +119,16 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
         true -> "UNKNOWN"
       end
 
+    bm = account["business"]
+
     %{
       meta_id: account["id"],
       name: account["name"],
       currency: account["currency"],
       timezone_name: account["timezone_name"],
       status: status,
+      bm_id: bm && bm["id"],
+      bm_name: bm && bm["name"],
       last_synced_at: DateTime.utc_now(),
       raw_jsonb: account
     }

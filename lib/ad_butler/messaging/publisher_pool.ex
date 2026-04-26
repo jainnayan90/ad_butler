@@ -32,8 +32,11 @@ defmodule AdButler.Messaging.PublisherPool do
     pool_size = :persistent_term.get({__MODULE__, :pool_size})
     counter = :persistent_term.get({__MODULE__, :counter})
     index = rem(:atomics.add_get(counter, 1, 1), pool_size)
-    [{pid, _}] = Registry.lookup(@registry, index)
-    GenServer.call(pid, {:publish, payload})
+
+    case Registry.lookup(@registry, index) do
+      [{pid, _}] -> GenServer.call(pid, {:publish, payload})
+      [] -> {:error, :not_connected}
+    end
   end
 
   @doc "Blocks until all pool workers have an open AMQP channel or `timeout` ms elapses."
