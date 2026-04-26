@@ -105,6 +105,14 @@ config :ad_butler, :rabbitmq,
 
 config :ad_butler, session_secure_cookie: false
 
+# Placeholder Meta credentials — only needed if you want to test the real OAuth
+# flow in dev. The /dev/login bypass works without these.
+config :ad_butler,
+  meta_app_id: System.get_env("META_APP_ID", "dev_meta_app_id"),
+  meta_app_secret: System.get_env("META_APP_SECRET", "dev_meta_app_secret"),
+  meta_oauth_callback_url:
+    System.get_env("META_OAUTH_CALLBACK_URL", "http://localhost:4000/auth/meta/callback")
+
 config :ad_butler,
   session_signing_salt: "dev_signing_salt",
   session_encryption_salt: "dev_encrypt_salt"

@@ -93,6 +93,7 @@ defmodule AdButlerWeb.Router do
 
       live_dashboard "/dashboard", metrics: AdButlerWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+      get "/login", AdButlerWeb.DevLoginController, :login
     end
   end
 end

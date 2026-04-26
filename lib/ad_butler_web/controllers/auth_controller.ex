@@ -13,7 +13,7 @@ defmodule AdButlerWeb.AuthController do
   require Logger
 
   alias AdButler.Accounts
-  alias AdButler.ErrorHelpers
+  alias AdButler.Sync.Scheduler
 
   @facebook_oauth_url "https://www.facebook.com/dialog/oauth"
 
@@ -30,7 +30,7 @@ defmodule AdButlerWeb.AuthController do
           client_id: app_id,
           redirect_uri: callback_url,
           state: state,
-          scope: "ads_read,ads_management,email"
+          scope: "ads_read,ads_management"
         })
 
     conn
@@ -57,8 +57,9 @@ defmodule AdButlerWeb.AuthController do
 
   def callback(conn, %{"code" => code, "state" => state}) do
     with {:ok, verified_conn} <- verify_state(conn, state),
-         {:ok, user, _conn_record} <- Accounts.authenticate_via_meta(code) do
+         {:ok, user, conn_record} <- Accounts.authenticate_via_meta(code) do
       Logger.info("OAuth success", user_id: user.id)
+      Scheduler.schedule_sync_for_connection(conn_record)
 
       verified_conn
       |> clear_session()
@@ -73,7 +74,7 @@ defmodule AdButlerWeb.AuthController do
         |> redirect(to: ~p"/")
 
       {:error, reason} ->
-        Logger.error("OAuth failure", reason: ErrorHelpers.safe_reason(reason))
+        Logger.error("OAuth failure reason=#{inspect(reason)}")
 
         conn
         |> delete_session(:oauth_state)
