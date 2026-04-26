@@ -66,7 +66,7 @@ defmodule AdButlerWeb.AuthController do
       |> configure_session(renew: true)
       |> put_session(:user_id, user.id)
       |> put_session(:live_socket_id, "users_sessions:#{user.id}")
-      |> redirect(to: ~p"/dashboard")
+      |> redirect(to: ~p"/connections")
     else
       {:error, :invalid_state, conn} ->
         conn
@@ -112,6 +112,11 @@ defmodule AdButlerWeb.AuthController do
       _ ->
         {:error, :invalid_state, delete_session(conn, :oauth_state)}
     end
+  end
+
+  @doc "Redirects legacy `/dashboard` URL to `/ad-accounts`."
+  def dashboard_redirect(conn, _params) do
+    redirect(conn, to: ~p"/ad-accounts")
   end
 
   @doc "Drops the session and disconnects any live sockets for the current user."

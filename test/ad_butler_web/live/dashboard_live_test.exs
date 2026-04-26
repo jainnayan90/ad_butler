@@ -14,14 +14,14 @@ defmodule AdButlerWeb.DashboardLiveTest do
 
     test "mounts and shows user email", %{conn: conn, user: user} do
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/dashboard")
+      {:ok, view, _html} = live(conn, ~p"/ad-accounts")
       html = render(view)
       assert html =~ user.email
     end
 
     test "shows ad account count of 1", %{conn: conn, user: user} do
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/dashboard")
+      {:ok, view, _html} = live(conn, ~p"/ad-accounts")
       html = render(view)
       assert html =~ ~r/<dd[^>]*>\s*1\s*<\/dd>/
       assert html =~ "Ad Accounts"
@@ -29,7 +29,7 @@ defmodule AdButlerWeb.DashboardLiveTest do
 
     test "shows ad account name in table", %{conn: conn, user: user, ad_account: aa} do
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/dashboard")
+      {:ok, view, _html} = live(conn, ~p"/ad-accounts")
       html = render(view)
       assert html =~ aa.name
     end
@@ -37,18 +37,18 @@ defmodule AdButlerWeb.DashboardLiveTest do
     test "empty state renders Connect Meta Account link when no accounts", %{conn: conn} do
       user = insert(:user)
       conn = log_in_user(conn, user)
-      {:ok, _view, html} = live(conn, ~p"/dashboard")
+      {:ok, _view, html} = live(conn, ~p"/ad-accounts")
       assert html =~ "Connect Meta Account"
       assert html =~ ~p"/auth/meta"
     end
 
     test "unauthenticated request redirects to /", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/dashboard")
+      assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/ad-accounts")
     end
 
     test "logout link renders with method=delete and href /auth/logout", %{conn: conn, user: user} do
       conn = log_in_user(conn, user)
-      {:ok, _view, html} = live(conn, ~p"/dashboard")
+      {:ok, _view, html} = live(conn, ~p"/ad-accounts")
       assert html =~ ~p"/auth/logout"
       assert html =~ "data-method=\"delete\""
     end

@@ -17,6 +17,7 @@ defmodule AdButler.Application do
   alias AdButler.Messaging.RabbitMQTopology
 
   @impl true
+  @spec start(any(), any()) :: {:error, any()} | {:ok, pid()}
   def start(_type, _args) do
     :telemetry.detach("oban-job-lifecycle-logger")
 
@@ -127,22 +128,22 @@ defmodule AdButler.Application do
   def handle_oban_event(
         [:oban, :job, :exception],
         _measurements,
-        %{job: job, kind: kind, reason: reason},
+        %{job: job, kind: kind, reason: reason, stacktrace: stacktrace},
         _config
       ) do
-    Logger.error("Oban job raised exception",
-      worker: job.worker,
-      id: job.id,
-      kind: kind,
-      reason: log_safe_reason(reason)
+    exception_module = exception_module(reason)
+
+    Logger.error(
+      "Oban job raised exception kind=#{kind} reason=#{exception_module} worker=#{job.worker} id=#{job.id}\n#{Exception.format_stacktrace(stacktrace)}"
     )
   end
 
   def handle_oban_event(_, _, _, _), do: :ok
 
-  defp log_safe_reason(%{__struct__: struct}), do: struct
-  defp log_safe_reason(reason) when is_atom(reason), do: reason
-  defp log_safe_reason(_), do: :unknown
+  defp exception_module(%{__struct__: struct, message: msg}), do: "#{struct}: #{msg}"
+  defp exception_module(%{__struct__: struct}), do: struct
+  defp exception_module(reason) when is_atom(reason), do: reason
+  defp exception_module(_), do: :unknown
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.

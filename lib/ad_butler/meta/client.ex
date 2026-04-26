@@ -19,7 +19,7 @@ defmodule AdButler.Meta.Client do
   @spec list_ad_accounts(String.t()) :: {:ok, list(map())} | {:error, term()}
   def list_ad_accounts(access_token) do
     make_request(:get, "#{@graph_api_base}/me/adaccounts",
-      params: [fields: "id,name,currency,timezone_name,account_status,business"],
+      params: [fields: "id,name,currency,timezone_name,account_status"],
       headers: auth_header(access_token)
     )
   end
@@ -66,7 +66,7 @@ defmodule AdButler.Meta.Client do
              ]
          ) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
-      {:ok, resp} -> {:error, handle_error(resp)}
+      {:ok, resp} -> {:error, handle_error(%{resp | body: decode_body(resp.body)})}
       {:error, %{reason: :timeout}} -> {:error, :timeout}
       {:error, reason} -> {:error, reason}
     end
@@ -85,7 +85,7 @@ defmodule AdButler.Meta.Client do
              ]
          ) do
       {:ok, %{status: 200, body: body}} when is_list(body) -> {:ok, body}
-      {:ok, resp} -> {:error, handle_error(resp)}
+      {:ok, resp} -> {:error, handle_error(%{resp | body: decode_body(resp.body)})}
       {:error, %{reason: :timeout}} -> {:error, :timeout}
       {:error, reason} -> {:error, reason}
     end
@@ -120,7 +120,7 @@ defmodule AdButler.Meta.Client do
              ]
          ) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
-      {:ok, resp} -> {:error, handle_error(resp)}
+      {:ok, resp} -> {:error, handle_error(%{resp | body: decode_body(resp.body)})}
       {:error, %{reason: :timeout}} -> {:error, :timeout}
       {:error, reason} -> {:error, reason}
     end
@@ -182,14 +182,17 @@ defmodule AdButler.Meta.Client do
     case Req.get(
            "#{@graph_api_base}/me",
            req_options() ++
-             [params: [fields: "id,name"], headers: auth_header(access_token)]
+             [params: [fields: "id,name,email"], headers: auth_header(access_token)]
          ) do
       {:ok, %{status: 200, body: body}} ->
         parsed = if is_binary(body), do: Jason.decode!(body), else: body
 
         case parsed do
-          %{"id" => id} -> {:ok, %{name: parsed["name"], meta_user_id: id}}
-          _ -> {:error, {:user_info_failed, parsed}}
+          %{"id" => id} ->
+            {:ok, %{name: parsed["name"], email: parsed["email"], meta_user_id: id}}
+
+          _ ->
+            {:error, {:user_info_failed, parsed}}
         end
 
       {:ok, %{body: body}} ->
@@ -208,7 +211,12 @@ defmodule AdButler.Meta.Client do
     headers = Keyword.get(opts, :headers, [])
     params = Keyword.get(opts, :params, [])
     ad_account_id = Keyword.get(opts, :ad_account_id)
+    fetch_all_pages(method, url, headers, params, ad_account_id, [])
+  end
 
+  # Follows Meta API pagination cursors until `paging.next` is absent.
+  # On page 2+, `params` is empty because `next_url` already contains the cursor.
+  defp fetch_all_pages(method, url, headers, params, ad_account_id, acc) do
     case Req.request(
            req_options() ++ [method: method, url: url, headers: headers, params: params]
          ) do
@@ -217,12 +225,18 @@ defmodule AdButler.Meta.Client do
         parse_rate_limit_header(resp, ad_account_id)
 
         case body do
-          %{"data" => data} -> {:ok, data}
-          other -> {:ok, other}
+          %{"data" => data, "paging" => %{"next" => next_url}} ->
+            fetch_all_pages(method, next_url, headers, [], ad_account_id, acc ++ data)
+
+          %{"data" => data} ->
+            {:ok, acc ++ data}
+
+          other ->
+            {:ok, other}
         end
 
       {:ok, resp} ->
-        {:error, handle_error(resp)}
+        {:error, handle_error(%{resp | body: decode_body(resp.body)})}
 
       {:error, %{reason: :timeout}} ->
         {:error, :timeout}

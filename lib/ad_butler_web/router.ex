@@ -60,10 +60,16 @@ defmodule AdButlerWeb.Router do
     pipe_through [:browser, :authenticated]
 
     live_session :authenticated,
+      layout: {AdButlerWeb.Layouts, :app},
       on_mount: {AdButlerWeb.AuthLive, :require_authenticated} do
-      live "/dashboard", DashboardLive
+      live "/connections", ConnectionsLive
+      live "/ad-accounts", DashboardLive
       live "/campaigns", CampaignsLive
+      live "/ad-sets", AdSetsLive
+      live "/ads", AdsLive
     end
+
+    get "/dashboard", AuthController, :dashboard_redirect
   end
 
   scope "/auth", AdButlerWeb do

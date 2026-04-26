@@ -27,7 +27,7 @@ defmodule AdButlerWeb.AuthControllerTest do
   end
 
   describe "GET /auth/meta/callback (valid)" do
-    test "creates user, sets session, redirects to /dashboard", %{conn: conn} do
+    test "creates user, sets session, redirects to /connections", %{conn: conn} do
       state = "test_state_value"
 
       conn =
@@ -49,7 +49,7 @@ defmodule AdButlerWeb.AuthControllerTest do
           "state" => state
         })
 
-      assert redirected_to(conn) =~ "/dashboard"
+      assert redirected_to(conn) =~ "/connections"
       assert get_session(conn, :user_id) != nil
     end
 
@@ -77,7 +77,7 @@ defmodule AdButlerWeb.AuthControllerTest do
   end
 
   describe "GET /auth/meta/callback (second auth / upsert)" do
-    test "second OAuth callback with same Meta user upserts connection and redirects to /dashboard",
+    test "second OAuth callback with same Meta user upserts connection and redirects to /connections",
          %{conn: conn} do
       meta_user_id = "987654321"
 
@@ -111,7 +111,7 @@ defmodule AdButlerWeb.AuthControllerTest do
           "state" => state
         })
 
-      assert redirected_to(conn) =~ "/dashboard"
+      assert redirected_to(conn) =~ "/connections"
       assert get_session(conn, :user_id) == existing_user.id
 
       user_count =

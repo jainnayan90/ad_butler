@@ -180,6 +180,15 @@ defmodule AdButler.Accounts do
     |> Repo.all()
   end
 
+  @doc "Returns all `MetaConnection` records belonging to `user` regardless of status, ordered newest first."
+  @spec list_all_meta_connections_for_user(User.t()) :: [MetaConnection.t()]
+  def list_all_meta_connections_for_user(%User{id: user_id}) do
+    MetaConnection
+    |> where([mc], mc.user_id == ^user_id)
+    |> order_by([mc], desc: mc.inserted_at)
+    |> Repo.all()
+  end
+
   @doc """
   Returns active connections whose tokens expire within `days_ahead` days,
   ordered by soonest expiry, up to `limit` rows. Used by

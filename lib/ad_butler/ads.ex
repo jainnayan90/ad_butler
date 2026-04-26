@@ -315,6 +315,41 @@ defmodule AdButler.Ads do
     )
   end
 
+  @doc """
+  Returns a page of ad sets for `user` and the total count matching the filters.
+
+  Options (in addition to filter opts `:ad_account_id`, `:campaign_id`):
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_ad_sets(User.t() | [binary()], keyword()) :: {[AdSet.t()], non_neg_integer()}
+  def paginate_ad_sets(user_or_mc_ids, opts \\ [])
+
+  def paginate_ad_sets(%User{} = user, opts) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    paginate_ad_sets(mc_ids, opts)
+  end
+
+  def paginate_ad_sets(mc_ids, opts) when is_list(mc_ids) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      AdSet
+      |> scope(mc_ids)
+      |> apply_ad_set_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
+  end
+
   defp apply_ad_set_filters(queryable, opts) do
     Enum.reduce(opts, queryable, fn
       {:ad_account_id, id}, q -> where(q, [s], s.ad_account_id == ^id)
@@ -390,6 +425,41 @@ defmodule AdButler.Ads do
 
     entries = bulk_strip_and_filter(entries, schema)
     Repo.insert_all(schema, entries, insert_opts)
+  end
+
+  @doc """
+  Returns a page of ads for `user` and the total count matching the filters.
+
+  Options (in addition to filter opts `:ad_account_id`, `:ad_set_id`):
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  """
+  @spec paginate_ads(User.t() | [binary()], keyword()) :: {[Ad.t()], non_neg_integer()}
+  def paginate_ads(user_or_mc_ids, opts \\ [])
+
+  def paginate_ads(%User{} = user, opts) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+    paginate_ads(mc_ids, opts)
+  end
+
+  def paginate_ads(mc_ids, opts) when is_list(mc_ids) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      Ad
+      |> scope(mc_ids)
+      |> apply_ad_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
   end
 
   defp apply_ad_filters(queryable, opts) do

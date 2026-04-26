@@ -1,14 +1,13 @@
-defmodule AdButlerWeb.CampaignsLive do
+defmodule AdButlerWeb.AdsLive do
   @moduledoc """
-  LiveView for browsing and filtering campaigns.
+  LiveView for browsing and filtering ads.
 
-  Streams a paginated page of campaigns for the authenticated user. Campaigns are
-  loaded in `handle_params/3` (not `mount/3`) so URL filter and page params are
-  honoured on both initial load and navigation. Filters and pagination push a
-  `patch` so the URL stays in sync with the current view state.
+  Streams a paginated page of ads for the authenticated user. Loaded in
+  `handle_params/3` so URL filter and page params are honoured on both initial
+  load and navigation. Filters and pagination push a `patch` to keep the URL
+  in sync.
 
   Authentication is enforced via `AdButlerWeb.AuthLive` on_mount hook.
-  `current_user` is always present when this LiveView runs.
   """
 
   use AdButlerWeb, :live_view
@@ -27,12 +26,12 @@ defmodule AdButlerWeb.CampaignsLive do
 
     socket =
       socket
-      |> stream(:campaigns, [])
-      |> assign(:active_nav, :campaigns)
+      |> stream(:ads, [])
+      |> assign(:active_nav, :ads)
       |> assign(:selected_ad_account, nil)
       |> assign(:selected_status, nil)
       |> assign(:ad_accounts_list, [])
-      |> assign(:campaign_count, 0)
+      |> assign(:ad_count, 0)
       |> assign(:page, 1)
       |> assign(:total_pages, 1)
 
@@ -54,7 +53,7 @@ defmodule AdButlerWeb.CampaignsLive do
       |> Keyword.put(:page, page)
       |> Keyword.put(:per_page, @per_page)
 
-    {campaigns, total} = Ads.paginate_campaigns(current_user, opts)
+    {ads, total} = Ads.paginate_ads(current_user, opts)
     total_pages = max(1, ceil(total / @per_page))
 
     ad_accounts =
@@ -65,10 +64,10 @@ defmodule AdButlerWeb.CampaignsLive do
 
     socket =
       socket
-      |> stream(:campaigns, campaigns, reset: true)
+      |> stream(:ads, ads, reset: true)
       |> assign(:selected_ad_account, ad_account_id)
       |> assign(:selected_status, status)
-      |> assign(:campaign_count, total)
+      |> assign(:ad_count, total)
       |> assign(:page, page)
       |> assign(:total_pages, total_pages)
       |> assign(:ad_accounts_list, ad_accounts)
@@ -85,7 +84,7 @@ defmodule AdButlerWeb.CampaignsLive do
       |> maybe_put("ad_account_id", params["ad_account_id"])
       |> maybe_put("status", status)
 
-    {:noreply, push_patch(socket, to: ~p"/campaigns?#{query}")}
+    {:noreply, push_patch(socket, to: ~p"/ads?#{query}")}
   end
 
   @impl true
@@ -96,7 +95,32 @@ defmodule AdButlerWeb.CampaignsLive do
       |> maybe_put("status", socket.assigns.selected_status)
       |> Map.put("page", page)
 
-    {:noreply, push_patch(socket, to: ~p"/campaigns?#{query}")}
+    {:noreply, push_patch(socket, to: ~p"/ads?#{query}")}
+  end
+
+  @impl true
+  def handle_info(:reload_on_reconnect, socket) do
+    current_user = socket.assigns.current_user
+
+    opts =
+      []
+      |> maybe_put(:ad_account_id, socket.assigns.selected_ad_account)
+      |> maybe_put(:status, socket.assigns.selected_status)
+      |> Keyword.put(:page, socket.assigns.page)
+      |> Keyword.put(:per_page, @per_page)
+
+    {ads, total} = Ads.paginate_ads(current_user, opts)
+    total_pages = max(1, ceil(total / @per_page))
+    ad_accounts = Ads.list_ad_accounts(current_user)
+
+    socket =
+      socket
+      |> stream(:ads, ads, reset: true)
+      |> assign(:ad_accounts_list, ad_accounts)
+      |> assign(:ad_count, total)
+      |> assign(:total_pages, total_pages)
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -104,8 +128,8 @@ defmodule AdButlerWeb.CampaignsLive do
     ~H"""
     <div>
       <div class="mb-6">
-        <h1 class="text-2xl font-semibold text-gray-900 mb-4">Campaigns</h1>
-        <DashboardComponents.stat_card label="Campaigns" value={@campaign_count} />
+        <h1 class="text-2xl font-semibold text-gray-900 mb-4">Ads</h1>
+        <DashboardComponents.stat_card label="Ads" value={@ad_count} />
       </div>
 
       <form phx-change="filter" class="mb-6 flex flex-wrap gap-4">
@@ -141,18 +165,15 @@ defmodule AdButlerWeb.CampaignsLive do
       </form>
 
       <div class="bg-white shadow rounded-lg">
-        <div :if={@campaign_count == 0} class="px-4 py-12 text-center">
-          <p class="text-gray-500">No campaigns match your filters.</p>
+        <div :if={@ad_count == 0} class="px-4 py-12 text-center">
+          <p class="text-gray-500">No ads match your filters.</p>
         </div>
 
-        <div :if={@campaign_count > 0}>
-          <.table id="campaigns" rows={@streams.campaigns}>
-            <:col :let={{_id, c}} label="Name">{c.name}</:col>
-            <:col :let={{_id, c}} label="Objective">{c.objective}</:col>
-            <:col :let={{_id, c}} label="Status">
-              <span class={campaign_status_class(c.status)}>
-                {c.status}
-              </span>
+        <div :if={@ad_count > 0}>
+          <.table id="ads" rows={@streams.ads}>
+            <:col :let={{_id, a}} label="Name">{a.name}</:col>
+            <:col :let={{_id, a}} label="Status">
+              <span class={status_badge_class(a.status)}>{a.status}</span>
             </:col>
           </.table>
           <.pagination page={@page} total_pages={@total_pages} />
@@ -162,42 +183,17 @@ defmodule AdButlerWeb.CampaignsLive do
     """
   end
 
-  defp campaign_status_class("ACTIVE"),
+  defp status_badge_class("ACTIVE"),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"
 
-  defp campaign_status_class("PAUSED"),
+  defp status_badge_class("PAUSED"),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
 
-  defp campaign_status_class("DELETED"),
+  defp status_badge_class("DELETED"),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800"
 
-  defp campaign_status_class(_),
+  defp status_badge_class(_),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"
-
-  @impl true
-  def handle_info(:reload_on_reconnect, socket) do
-    current_user = socket.assigns.current_user
-
-    opts =
-      []
-      |> maybe_put(:ad_account_id, socket.assigns.selected_ad_account)
-      |> maybe_put(:status, socket.assigns.selected_status)
-      |> Keyword.put(:page, socket.assigns.page)
-      |> Keyword.put(:per_page, @per_page)
-
-    {campaigns, total} = Ads.paginate_campaigns(current_user, opts)
-    total_pages = max(1, ceil(total / @per_page))
-    ad_accounts = Ads.list_ad_accounts(current_user)
-
-    socket =
-      socket
-      |> stream(:campaigns, campaigns, reset: true)
-      |> assign(:ad_accounts_list, ad_accounts)
-      |> assign(:campaign_count, total)
-      |> assign(:total_pages, total_pages)
-
-    {:noreply, socket}
-  end
 
   defp parse_page(nil), do: 1
   defp parse_page(p) when is_binary(p), do: max(1, String.to_integer(p))
