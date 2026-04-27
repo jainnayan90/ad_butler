@@ -38,6 +38,10 @@ if config_env() == :prod do
     raise "CLOAK_KEY must be exactly 32 bytes after base64 decoding, got #{byte_size(cloak_key)}"
   end
 
+  if cloak_key == <<0::256>> do
+    raise "CLOAK_KEY must not be the all-zeros placeholder in prod"
+  end
+
   config :ad_butler, AdButler.Vault,
     ciphers: [
       default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: cloak_key}
@@ -49,6 +53,23 @@ if config_env() == :prod do
     meta_app_id: System.fetch_env!("META_APP_ID"),
     meta_app_secret: System.fetch_env!("META_APP_SECRET"),
     meta_oauth_callback_url: System.fetch_env!("META_OAUTH_CALLBACK_URL")
+end
+
+if config_env() == :dev do
+  cloak_key_dev =
+    Base.decode64!(
+      System.get_env("CLOAK_KEY_DEV") ||
+        raise("Set CLOAK_KEY_DEV in .env.local (run: openssl rand -base64 32)")
+    )
+
+  if cloak_key_dev == <<0::256>> do
+    raise "CLOAK_KEY_DEV must not be the all-zeros placeholder — generate a real key with: openssl rand -base64 32"
+  end
+
+  config :ad_butler, AdButler.Vault,
+    ciphers: [
+      default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: cloak_key_dev}
+    ]
 end
 
 if config_env() == :prod do

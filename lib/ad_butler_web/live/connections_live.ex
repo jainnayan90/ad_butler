@@ -11,15 +11,48 @@ defmodule AdButlerWeb.ConnectionsLive do
 
   alias AdButler.Accounts
 
+  @per_page 50
+
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, :active_nav, :connections)}
+    socket =
+      socket
+      |> assign(:active_nav, :connections)
+      |> assign(:page, 1)
+      |> assign(:total_pages, 1)
+      |> assign(:connection_count, 0)
+      |> stream(:connections, [])
+
+    {:ok, socket}
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
-    connections = Accounts.list_all_meta_connections_for_user(socket.assigns.current_user)
-    {:noreply, assign(socket, :connections, connections)}
+  def handle_params(params, _uri, socket) do
+    page = parse_page(params["page"])
+
+    socket =
+      if connected?(socket) do
+        {items, total} =
+          Accounts.paginate_meta_connections(socket.assigns.current_user,
+            page: page,
+            per_page: @per_page
+          )
+
+        total_pages = max(1, ceil(total / @per_page))
+
+        socket
+        |> stream(:connections, items, reset: true)
+        |> assign(:page, page)
+        |> assign(:total_pages, total_pages)
+        |> assign(:connection_count, total)
+      else
+        socket
+        |> stream(:connections, [], reset: true)
+        |> assign(:page, page)
+        |> assign(:total_pages, 1)
+      end
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -36,7 +69,7 @@ defmodule AdButlerWeb.ConnectionsLive do
         </a>
       </div>
 
-      <div :if={@connections == []} class="text-center py-16">
+      <div :if={@connection_count == 0} class="text-center py-16">
         <.icon name="hero-link" class="size-12 text-gray-400 mx-auto mb-4" />
         <p class="text-gray-500 mb-4">No Meta connections yet.</p>
         <a
@@ -47,9 +80,9 @@ defmodule AdButlerWeb.ConnectionsLive do
         </a>
       </div>
 
-      <div :if={@connections != []} class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div :if={@connection_count > 0} class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
-          :for={conn <- @connections}
+          :for={{_dom_id, conn} <- @streams.connections}
           class="bg-white rounded-lg border border-gray-200 shadow-sm p-5 flex flex-col gap-3"
         >
           <div class="flex items-center justify-between">
@@ -79,8 +112,19 @@ defmodule AdButlerWeb.ConnectionsLive do
           </a>
         </div>
       </div>
+
+      <.pagination page={@page} total_pages={@total_pages} />
     </div>
     """
+  end
+
+  defp parse_page(nil), do: 1
+
+  defp parse_page(p) when is_binary(p) do
+    case Integer.parse(p) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
   end
 
   defp connection_badge_class("active"),

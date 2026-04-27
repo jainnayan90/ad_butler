@@ -80,7 +80,7 @@ defmodule AdButler.MixProject do
       {:plug_attack, "~> 0.4"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:broadway_rabbitmq, "~> 0.8"},
-      {:logger_json, "~> 6.0"}
+      {:logger_json, "~> 7.0"}
     ]
   end
 
@@ -104,11 +104,15 @@ defmodule AdButler.MixProject do
         "esbuild theme --minify",
         "phx.digest"
       ],
+      "check.unsafe_callers": [
+        "cmd ! grep -rn 'Ads\\.unsafe_' lib/ad_butler_web || (echo 'ERROR: Ads.unsafe_ called from web layer' && exit 1)"
+      ],
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",
         "format",
         "hex.audit",
+        "check.unsafe_callers",
         "test"
       ]
     ]

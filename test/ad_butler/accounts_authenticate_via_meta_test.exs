@@ -28,7 +28,7 @@ defmodule AdButler.AccountsAuthenticateViaMetaTest do
     end
 
     test "returns error when token exchange fails" do
-      stub(ClientMock, :exchange_code, fn _code ->
+      expect(ClientMock, :exchange_code, 1, fn _code ->
         {:error, {:token_exchange_failed, "Invalid code"}}
       end)
 
@@ -36,11 +36,11 @@ defmodule AdButler.AccountsAuthenticateViaMetaTest do
     end
 
     test "returns error when get_me fails" do
-      stub(ClientMock, :exchange_code, fn _code ->
+      expect(ClientMock, :exchange_code, 1, fn _code ->
         {:ok, %{access_token: "test_token", expires_in: 86_400}}
       end)
 
-      stub(ClientMock, :get_me, fn _token ->
+      expect(ClientMock, :get_me, 1, fn _token ->
         {:error, {:user_info_failed, "Invalid token"}}
       end)
 

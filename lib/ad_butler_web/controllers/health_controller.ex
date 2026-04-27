@@ -9,8 +9,7 @@ defmodule AdButlerWeb.HealthController do
 
   use AdButlerWeb, :controller
 
-  alias AdButler.Repo
-  alias Ecto.Adapters.SQL
+  alias AdButler.Health
 
   @doc "Returns 200 OK unconditionally — signals the process is alive."
   def liveness(conn, _params) do
@@ -42,11 +41,7 @@ defmodule AdButlerWeb.HealthController do
   end
 
   defp db_ping do
-    ping_fn = Application.get_env(:ad_butler, :db_ping_fn, &default_db_ping/0)
+    ping_fn = Application.get_env(:ad_butler, :db_ping_fn, &Health.db_ping/0)
     ping_fn.()
-  end
-
-  defp default_db_ping do
-    SQL.query(Repo, "SELECT 1", [], timeout: 1_000, queue_target: 200)
   end
 end

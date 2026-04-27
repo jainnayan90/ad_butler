@@ -20,14 +20,14 @@ defmodule AdButler.Workers.SyncAllConnectionsWorker do
 
   @impl Oban.Worker
   def perform(_job) do
-    case AdButler.Repo.transaction(&insert_jobs/0, timeout: :timer.minutes(2)) do
+    case Accounts.stream_connections_and_run(&insert_jobs/1) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp insert_jobs do
-    Accounts.stream_active_meta_connections()
+  defp insert_jobs(stream) do
+    stream
     |> Stream.map(&FetchAdAccountsWorker.new(%{"meta_connection_id" => &1.id}))
     |> Stream.chunk_every(200)
     |> Enum.each(&Oban.insert_all/1)

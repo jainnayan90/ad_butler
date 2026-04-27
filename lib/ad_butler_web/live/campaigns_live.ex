@@ -13,6 +13,7 @@ defmodule AdButlerWeb.CampaignsLive do
 
   use AdButlerWeb, :live_view
 
+  alias AdButler.Accounts
   alias AdButler.Ads
   alias AdButlerWeb.DashboardComponents
 
@@ -176,7 +177,7 @@ defmodule AdButlerWeb.CampaignsLive do
 
   @impl true
   def handle_info(:reload_on_reconnect, socket) do
-    current_user = socket.assigns.current_user
+    mc_ids = Accounts.list_meta_connection_ids_for_user(socket.assigns.current_user)
 
     opts =
       []
@@ -185,9 +186,9 @@ defmodule AdButlerWeb.CampaignsLive do
       |> Keyword.put(:page, socket.assigns.page)
       |> Keyword.put(:per_page, @per_page)
 
-    {campaigns, total} = Ads.paginate_campaigns(current_user, opts)
+    {campaigns, total} = Ads.paginate_campaigns(mc_ids, opts)
     total_pages = max(1, ceil(total / @per_page))
-    ad_accounts = Ads.list_ad_accounts(current_user)
+    ad_accounts = Ads.list_ad_accounts(mc_ids)
 
     socket =
       socket
@@ -200,7 +201,13 @@ defmodule AdButlerWeb.CampaignsLive do
   end
 
   defp parse_page(nil), do: 1
-  defp parse_page(p) when is_binary(p), do: max(1, String.to_integer(p))
+
+  defp parse_page(p) when is_binary(p) do
+    case Integer.parse(p) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
 
   defp maybe_put(acc, _key, nil), do: acc
   defp maybe_put(acc, _key, ""), do: acc

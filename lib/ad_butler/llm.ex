@@ -65,6 +65,16 @@ defmodule AdButler.LLM do
     Repo.get_by!(Usage, id: id, user_id: user_id)
   end
 
+  @doc false
+  def insert_usage(attrs) when is_map(attrs) do
+    changeset = Usage.changeset(%Usage{}, attrs)
+
+    case Repo.insert(changeset, on_conflict: :nothing, conflict_target: [:request_id]) do
+      {:ok, _} -> :ok
+      {:error, cs} -> {:error, cs}
+    end
+  end
+
   defp maybe_filter(query, _field, nil), do: query
   defp maybe_filter(query, field, value), do: where(query, [u], field(u, ^field) == ^value)
 end

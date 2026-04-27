@@ -51,10 +51,10 @@ defmodule AdButler.AccountsTest do
       assert %{email: [_]} = errors_on(changeset)
     end
 
-    test "returns error changeset when email is nil" do
+    test "succeeds with nil email (email is optional)" do
       n = System.unique_integer([:positive])
-      assert {:error, changeset} = Accounts.create_or_update_user(%{meta_user_id: "#{n}"})
-      assert %{email: [_]} = errors_on(changeset)
+      assert {:ok, user} = Accounts.create_or_update_user(%{meta_user_id: "#{n}"})
+      assert is_nil(user.email)
     end
   end
 

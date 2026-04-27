@@ -15,8 +15,7 @@ defmodule AdButler.LLM.UsageHandler do
 
   require Logger
 
-  alias AdButler.LLM.Usage
-  alias AdButler.Repo
+  alias AdButler.LLM
 
   @handler_id "llm-usage-logger"
   @events [[:llm, :request, :stop], [:llm, :request, :exception]]
@@ -101,14 +100,12 @@ defmodule AdButler.LLM.UsageHandler do
   end
 
   defp insert_usage(attrs) do
-    changeset = Usage.changeset(%Usage{}, attrs)
-
-    case Repo.insert(changeset, on_conflict: :nothing, conflict_target: [:request_id]) do
-      {:ok, _} ->
+    case LLM.insert_usage(attrs) do
+      :ok ->
         :ok
 
-      {:error, changeset} ->
-        Logger.warning("LLM usage insert failed", errors: inspect(changeset.errors))
+      {:error, cs} ->
+        Logger.warning("LLM usage insert failed", errors: inspect(cs.errors))
     end
   end
 end

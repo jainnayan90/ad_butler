@@ -37,9 +37,9 @@ config :swoosh, api_client: Swoosh.ApiClient.Req
 config :swoosh, local: false
 
 # Do not print debug messages in production
-config :logger, level: :info, backends: [LoggerJSON]
+config :logger, level: :info
 
-config :logger_json, :backend, formatter: LoggerJSON.Formatters.Basic
+config :logger, :default_handler, formatter: {LoggerJSON.Formatters.Basic, metadata: :all}
 
 config :ad_butler, trusted_proxy: :fly
 

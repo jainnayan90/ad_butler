@@ -12,12 +12,18 @@ defmodule AdButler.Ads do
 
   alias AdButler.Accounts
   alias AdButler.Accounts.User
-  alias AdButler.Ads.{Ad, AdAccount, AdSet, Campaign, Creative}
+  alias AdButler.Ads.{Ad, AdAccount, AdSet, Campaign, Creative, Insight}
   alias AdButler.Repo
 
   # ---------------------------------------------------------------------------
   # Security boundary: all user-facing queries pass through scope/2
   # ---------------------------------------------------------------------------
+
+  # Applies a struct/2 select that excludes heavy JSON columns from list queries.
+  defp select_list_fields(queryable, schema, exclude \\ [:raw_jsonb]) do
+    fields = schema.__schema__(:fields) -- exclude
+    select(queryable, [x], struct(x, ^fields))
+  end
 
   # Accepts a pre-fetched list of MetaConnection UUIDs. Public list functions call
   # Accounts.list_meta_connection_ids_for_user/1 once and pass the result here,
@@ -46,9 +52,20 @@ defmodule AdButler.Ads do
 
   @spec list_ad_accounts([binary()]) :: [AdAccount.t()]
   def list_ad_accounts(mc_ids) when is_list(mc_ids) do
-    AdAccount
-    |> scope_ad_account(mc_ids)
-    |> Repo.all()
+    rows =
+      AdAccount
+      |> scope_ad_account(mc_ids)
+      |> limit(200)
+      |> select_list_fields(AdAccount)
+      |> Repo.all()
+
+    if length(rows) == 200 do
+      Logger.warning("list_ad_accounts truncated at 200 rows",
+        meta_connection_count: length(mc_ids)
+      )
+    end
+
+    rows
   end
 
   @doc """
@@ -71,6 +88,7 @@ defmodule AdButler.Ads do
       base
       |> limit(^per_page)
       |> offset(^((page - 1) * per_page))
+      |> select_list_fields(AdAccount)
       |> Repo.all()
 
     {items, total}
@@ -89,6 +107,37 @@ defmodule AdButler.Ads do
   @doc "UNSAFE — bypasses tenant scope. Use only in internal sync pipeline, never in user-facing controllers."
   @spec unsafe_get_ad_account_for_sync(binary()) :: AdAccount.t() | nil
   def unsafe_get_ad_account_for_sync(id), do: Repo.get(AdAccount, id)
+
+  @doc "UNSAFE — returns all active ad accounts regardless of tenant. Internal scheduler use only."
+  @spec list_ad_accounts_internal() :: [AdAccount.t()]
+  def list_ad_accounts_internal do
+    Repo.all(from aa in AdAccount, where: aa.status == "ACTIVE")
+  end
+
+  @doc "Streams active AdAccounts for internal scheduler use. Must be called inside a transaction."
+  @spec stream_active_ad_accounts() :: Enum.t()
+  def stream_active_ad_accounts do
+    from(aa in AdAccount, where: aa.status == "ACTIVE")
+    |> Repo.stream(max_rows: 500)
+  end
+
+  @doc "Streams active ad accounts inside a transaction and passes the stream to `fun`. Returns `{:ok, fun_result} | {:error, reason}`."
+  @spec stream_ad_accounts_and_run((Enumerable.t() -> any()), keyword()) ::
+          {:ok, any()} | {:error, any()}
+  def stream_ad_accounts_and_run(fun, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, :timer.minutes(5))
+    Repo.transaction(fn -> fun.(stream_active_ad_accounts()) end, timeout: timeout)
+  end
+
+  @doc "UNSAFE — queries ads by `ad_account_id` without tenant scope. Callers must verify ownership of `ad_account_id` before calling."
+  @spec unsafe_get_ad_meta_id_map(binary()) :: %{String.t() => binary()}
+  def unsafe_get_ad_meta_id_map(ad_account_id) do
+    Ad
+    |> where([a], a.ad_account_id == ^ad_account_id)
+    |> select([a], {a.meta_id, a.id})
+    |> Repo.all()
+    |> Map.new()
+  end
 
   @doc "Returns the `AdAccount` matching `(meta_connection_id, meta_id)`, or `nil`."
   @spec get_ad_account_by_meta_id(binary(), binary()) :: AdAccount.t() | nil
@@ -181,6 +230,7 @@ defmodule AdButler.Ads do
     Campaign
     |> scope(mc_ids)
     |> apply_campaign_filters(opts)
+    |> select_list_fields(Campaign)
     |> Repo.all()
   end
 
@@ -215,6 +265,7 @@ defmodule AdButler.Ads do
       base
       |> limit(^per_page)
       |> offset(^((page - 1) * per_page))
+      |> select_list_fields(Campaign)
       |> Repo.all()
 
     {items, total}
@@ -278,6 +329,7 @@ defmodule AdButler.Ads do
     AdSet
     |> scope(mc_ids)
     |> apply_ad_set_filters(opts)
+    |> select_list_fields(AdSet, [:raw_jsonb, :targeting_jsonb])
     |> Repo.all()
   end
 
@@ -345,6 +397,7 @@ defmodule AdButler.Ads do
       base
       |> limit(^per_page)
       |> offset(^((page - 1) * per_page))
+      |> select_list_fields(AdSet, [:raw_jsonb, :targeting_jsonb])
       |> Repo.all()
 
     {items, total}
@@ -375,6 +428,7 @@ defmodule AdButler.Ads do
     Ad
     |> scope(mc_ids)
     |> apply_ad_filters(opts)
+    |> select_list_fields(Ad)
     |> Repo.all()
   end
 
@@ -457,6 +511,7 @@ defmodule AdButler.Ads do
       base
       |> limit(^per_page)
       |> offset(^((page - 1) * per_page))
+      |> select_list_fields(Ad)
       |> Repo.all()
 
     {items, total}
@@ -494,6 +549,106 @@ defmodule AdButler.Ads do
   # ---------------------------------------------------------------------------
   # Creative
   # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Insights
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Bulk-upserts a list of insight rows into `insights_daily`.
+
+  Each map in `rows` must include at minimum `:ad_id` and `:date_start`. All
+  numeric fields are assumed already normalised to cents/integers by the caller.
+  Returns `{:ok, count}` on success or `{:error, term()}` on failure.
+  """
+  @spec bulk_upsert_insights([map()]) :: {:ok, non_neg_integer()} | {:error, term()}
+  def bulk_upsert_insights(rows) when is_list(rows) do
+    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+    entries =
+      Enum.map(rows, fn row ->
+        row
+        |> Map.put_new(:inserted_at, now)
+        |> Map.put(:updated_at, now)
+      end)
+
+    {count, _} =
+      Repo.insert_all(Insight, entries,
+        on_conflict:
+          {:replace,
+           [
+             :spend_cents,
+             :impressions,
+             :clicks,
+             :reach_count,
+             :frequency,
+             :conversions,
+             :conversion_value_cents,
+             :ctr_numeric,
+             :cpm_cents,
+             :cpc_cents,
+             :cpa_cents,
+             :by_placement_jsonb,
+             :by_age_gender_jsonb,
+             :updated_at
+           ]},
+        conflict_target: [:ad_id, :date_start]
+      )
+
+    {:ok, count}
+  rescue
+    e in Postgrex.Error ->
+      Logger.error("bulk_upsert_insights failed", reason: Exception.message(e))
+      {:error, :upsert_failed}
+  end
+
+  @doc "UNSAFE — queries the `ad_insights_7d` view directly by `ad_id` without tenant scope. Caller must verify `ad_id` ownership before calling."
+  @spec unsafe_get_7d_insights(binary()) :: {:ok, map() | nil}
+  def unsafe_get_7d_insights(ad_id) do
+    row =
+      Repo.one(
+        from v in "ad_insights_7d",
+          where: v.ad_id == type(^ad_id, :binary_id),
+          select: %{
+            ad_id: v.ad_id,
+            spend_cents: type(v.spend_cents, :integer),
+            impressions: type(v.impressions, :integer),
+            clicks: type(v.clicks, :integer),
+            conversions: type(v.conversions, :integer),
+            conversion_value_cents: type(v.conversion_value_cents, :integer),
+            ctr: v.ctr,
+            cpm_cents: type(v.cpm_cents, :integer),
+            cpc_cents: type(v.cpc_cents, :integer),
+            cpa_cents: type(v.cpa_cents, :integer)
+          }
+      )
+
+    {:ok, row}
+  end
+
+  @doc "UNSAFE — queries the `ad_insights_30d` view directly by `ad_id` without tenant scope. Caller must verify `ad_id` ownership before calling."
+  @spec unsafe_get_30d_baseline(binary()) :: {:ok, map() | nil}
+  def unsafe_get_30d_baseline(ad_id) do
+    row =
+      Repo.one(
+        from v in "ad_insights_30d",
+          where: v.ad_id == type(^ad_id, :binary_id),
+          select: %{
+            ad_id: v.ad_id,
+            spend_cents: type(v.spend_cents, :integer),
+            impressions: type(v.impressions, :integer),
+            clicks: type(v.clicks, :integer),
+            conversions: type(v.conversions, :integer),
+            conversion_value_cents: type(v.conversion_value_cents, :integer),
+            ctr: v.ctr,
+            cpm_cents: type(v.cpm_cents, :integer),
+            cpc_cents: type(v.cpc_cents, :integer),
+            cpa_cents: type(v.cpa_cents, :integer)
+          }
+      )
+
+    {:ok, row}
+  end
 
   @doc "Inserts or updates a creative for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_creative(AdAccount.t(), map()) ::

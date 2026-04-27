@@ -174,7 +174,8 @@ defmodule Mix.Tasks.AdButler.ReplayDlqTest do
   end
 
   # Polls until the queue reaches the expected depth or deadline passes (500ms).
-  # Avoids fixed-duration sleeps that are flaky under CI load.
+  # Uses receive/after rather than Process.sleep so the calling process remains
+  # schedulable and honours any pending messages during the poll interval.
   defp wait_for_queue_depth(channel, queue, expected, deadline \\ nil) do
     deadline = deadline || System.monotonic_time(:millisecond) + 500
 
@@ -183,8 +184,10 @@ defmodule Mix.Tasks.AdButler.ReplayDlqTest do
     if count >= expected or System.monotonic_time(:millisecond) >= deadline do
       :ok
     else
-      Process.sleep(20)
-      wait_for_queue_depth(channel, queue, expected, deadline)
+      receive do
+      after
+        20 -> wait_for_queue_depth(channel, queue, expected, deadline)
+      end
     end
   end
 end

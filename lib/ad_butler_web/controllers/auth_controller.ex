@@ -47,7 +47,7 @@ defmodule AdButlerWeb.AuthController do
   def callback(conn, %{"error" => _error, "error_description" => description})
       when is_binary(description) do
     safe_description = String.slice(description, 0, 200)
-    Logger.warning("OAuth error from provider (truncated): #{safe_description}")
+    Logger.warning("oauth_provider_error", description: safe_description)
 
     conn
     |> delete_session(:oauth_state)
@@ -74,7 +74,7 @@ defmodule AdButlerWeb.AuthController do
         |> redirect(to: ~p"/")
 
       {:error, reason} ->
-        Logger.error("OAuth failure reason=#{inspect(reason)}")
+        Logger.error("oauth_failure", reason: inspect(reason))
 
         conn
         |> delete_session(:oauth_state)

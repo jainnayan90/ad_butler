@@ -107,7 +107,13 @@ defmodule AdButlerWeb.DashboardLive do
   end
 
   defp parse_page(nil), do: 1
-  defp parse_page(p) when is_binary(p), do: max(1, String.to_integer(p))
+
+  defp parse_page(p) when is_binary(p) do
+    case Integer.parse(p) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
 
   defp status_class("ACTIVE"),
     do: "inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800"

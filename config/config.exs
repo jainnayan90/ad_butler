@@ -91,7 +91,19 @@ config :logger, :default_formatter,
     :errors,
     :meta_connection_ids,
     :newly_enqueued,
-    :skipped
+    :skipped,
+    :sync_type,
+    :usage,
+    :partition,
+    :week_start,
+    :view,
+    :duration_ms,
+    :delivery_queue,
+    :conversions_queue,
+    :meta_connection_count,
+    :description,
+    :date_start,
+    :dropped
   ]
 
 # Use Jason for JSON parsing in Phoenix
@@ -121,7 +133,12 @@ config :ad_butler, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"0 */6 * * *", AdButler.Workers.TokenRefreshSweepWorker},
-       {"5 */6 * * *", AdButler.Workers.SyncAllConnectionsWorker}
+       {"5 */6 * * *", AdButler.Workers.SyncAllConnectionsWorker},
+       {"0 3 * * 0", AdButler.Workers.PartitionManagerWorker},
+       {"*/15 * * * *", AdButler.Workers.MatViewRefreshWorker, args: %{"view" => "7d"}},
+       {"0 * * * *", AdButler.Workers.MatViewRefreshWorker, args: %{"view" => "30d"}},
+       {"*/30 * * * *", AdButler.Workers.InsightsSchedulerWorker},
+       {"0 */2 * * *", AdButler.Workers.InsightsConversionWorker}
      ]}
   ]
 
