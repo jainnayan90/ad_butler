@@ -18,4 +18,10 @@ defmodule AdButler.Meta.ClientBehaviour do
   @callback exchange_code(String.t()) ::
               {:ok, %{access_token: String.t(), expires_in: pos_integer()}} | {:error, term()}
   @callback get_me(String.t()) :: {:ok, map()} | {:error, term()}
+
+  @callback get_insights(
+              ad_account_id :: String.t(),
+              access_token :: String.t(),
+              opts :: keyword()
+            ) :: {:ok, [map()]} | {:error, term()}
 end

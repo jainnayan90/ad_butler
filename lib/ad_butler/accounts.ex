@@ -180,6 +180,24 @@ defmodule AdButler.Accounts do
     |> Repo.all()
   end
 
+  @doc """
+  Returns a page of MetaConnections for `user` (all statuses) and the total count.
+  Options: `:page` (default 1), `:per_page` (default 50).
+  """
+  @spec paginate_meta_connections(User.t(), keyword()) ::
+          {[MetaConnection.t()], non_neg_integer()}
+  def paginate_meta_connections(%User{id: user_id}, opts \\ []) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      from(mc in MetaConnection, where: mc.user_id == ^user_id, order_by: [desc: mc.inserted_at])
+
+    total = Repo.aggregate(base, :count)
+    items = base |> limit(^per_page) |> offset(^((page - 1) * per_page)) |> Repo.all()
+    {items, total}
+  end
+
   @doc "Returns all `MetaConnection` records belonging to `user` regardless of status, ordered newest first."
   @spec list_all_meta_connections_for_user(User.t()) :: [MetaConnection.t()]
   def list_all_meta_connections_for_user(%User{id: user_id}) do
@@ -203,6 +221,14 @@ defmodule AdButler.Accounts do
     |> order_by([mc], asc: mc.token_expires_at)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  @doc "Runs `fun` inside a transaction with a stream of active MetaConnections."
+  @spec stream_connections_and_run((Enumerable.t() -> any()), keyword()) ::
+          {:ok, any()} | {:error, term()}
+  def stream_connections_and_run(fun, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, :timer.minutes(2))
+    Repo.transaction(fn -> fun.(stream_active_meta_connections()) end, timeout: timeout)
   end
 
   defp meta_client, do: Client.client()

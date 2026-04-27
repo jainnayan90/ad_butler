@@ -226,10 +226,10 @@ defmodule AdButler.Meta.Client do
 
         case body do
           %{"data" => data, "paging" => %{"next" => next_url}} ->
-            fetch_all_pages(method, next_url, headers, [], ad_account_id, acc ++ data)
+            fetch_all_pages(method, next_url, headers, [], ad_account_id, [data | acc])
 
           %{"data" => data} ->
-            {:ok, acc ++ data}
+            {:ok, [data | acc] |> Enum.reverse() |> List.flatten()}
 
           other ->
             {:ok, other}
@@ -306,6 +306,140 @@ defmodule AdButler.Meta.Client do
   end
 
   defp parse_rate_limit_header(_, _), do: :ok
+
+  @impl true
+  @spec get_insights(String.t(), String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def get_insights(ad_account_id, access_token, opts \\ []) do
+    {since, until_date} = insights_time_range(opts)
+
+    case make_request(:get, "#{@graph_api_base}/#{ad_account_id}/insights",
+           params: [
+             level: "ad",
+             fields:
+               "ad_id,date_start,spend,impressions,clicks,reach,frequency,ctr,cpm,cpc,actions,action_values",
+             time_range: Jason.encode!(%{since: since, until: until_date}),
+             breakdowns: "publisher_platform"
+           ],
+           headers: auth_header(access_token),
+           ad_account_id: ad_account_id
+         ) do
+      {:ok, rows} when is_list(rows) ->
+        {:ok, Enum.map(rows, &parse_insight_row/1)}
+
+      {:ok, other} ->
+        {:ok, other}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp insights_time_range(opts) do
+    case Keyword.get(opts, :time_range) do
+      %{since: since, until: until_date} ->
+        {to_string(since), to_string(until_date)}
+
+      nil ->
+        today = Date.utc_today()
+        since = Date.add(today, -2)
+        {Date.to_iso8601(since), Date.to_iso8601(today)}
+    end
+  end
+
+  defp parse_insight_row(row) do
+    %{
+      "ad_id" => ad_id,
+      "date_start" => date_start
+    } = row
+
+    %{
+      ad_id: ad_id,
+      date_start: date_start,
+      spend_cents: parse_money_cents(row["spend"]),
+      impressions: parse_integer(row["impressions"]),
+      clicks: parse_integer(row["clicks"]),
+      reach_count: parse_integer(row["reach"]),
+      frequency: parse_float(row["frequency"]),
+      conversions: extract_conversions(row["actions"]),
+      conversion_value_cents: extract_conversion_value_cents(row["action_values"]),
+      ctr_numeric: parse_float(row["ctr"]),
+      cpm_cents: parse_money_cents(row["cpm"]),
+      cpc_cents: parse_money_cents(row["cpc"]),
+      cpa_cents: nil,
+      by_placement_jsonb: nil,
+      by_age_gender_jsonb: nil
+    }
+  end
+
+  defp extract_conversions(nil), do: 0
+
+  defp extract_conversions(actions) when is_list(actions) do
+    actions
+    |> Enum.filter(fn a ->
+      a["action_type"] in [
+        "offsite_conversion.fb_pixel_purchase",
+        "purchase"
+      ]
+    end)
+    |> Enum.reduce(0, fn a, acc ->
+      acc + round(parse_float_val(a["value"]))
+    end)
+  end
+
+  defp extract_conversion_value_cents(nil), do: 0
+
+  defp extract_conversion_value_cents(action_values) when is_list(action_values) do
+    action_values
+    |> Enum.filter(fn a ->
+      a["action_type"] in [
+        "offsite_conversion.fb_pixel_purchase",
+        "purchase"
+      ]
+    end)
+    |> Enum.reduce(0.0, fn a, acc -> acc + parse_float_val(a["value"]) end)
+    |> then(&round(&1 * 100))
+  end
+
+  defp parse_money_cents(nil), do: nil
+  defp parse_money_cents(v) when is_number(v), do: round(v * 100)
+
+  defp parse_money_cents(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> round(f * 100)
+      :error -> nil
+    end
+  end
+
+  defp parse_integer(nil), do: 0
+  defp parse_integer(v) when is_integer(v), do: v
+
+  defp parse_integer(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {n, _} -> n
+      :error -> 0
+    end
+  end
+
+  defp parse_float(nil), do: nil
+
+  defp parse_float(v) do
+    case parse_float_val(v) do
+      f when is_float(f) -> Decimal.from_float(f)
+      _ -> nil
+    end
+  end
+
+  defp parse_float_val(v) when is_float(v), do: v
+  defp parse_float_val(v) when is_integer(v), do: v * 1.0
+
+  defp parse_float_val(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> f
+      :error -> 0.0
+    end
+  end
+
+  defp parse_float_val(nil), do: 0.0
 
   @doc "Returns the configured Meta API client module (injectable for testing)."
   def client, do: Application.get_env(:ad_butler, :meta_client, __MODULE__)

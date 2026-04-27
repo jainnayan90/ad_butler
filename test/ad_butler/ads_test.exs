@@ -3,6 +3,7 @@ defmodule AdButler.AdsTest do
 
   import AdButler.Factory
 
+  alias AdButler.Accounts
   alias AdButler.Ads
 
   # ---------------------------------------------------------------------------
@@ -503,6 +504,124 @@ defmodule AdButler.AdsTest do
       result = Ads.list_ads(user_a)
       assert length(result) == 1
       assert hd(result).id == ad_a.id
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # paginate_ad_accounts/2
+  # ---------------------------------------------------------------------------
+
+  describe "paginate_ad_accounts/2" do
+    test "returns correct items and total count" do
+      user = insert(:user)
+      for _ <- 1..3, do: insert_ad_account_for_user(user)
+
+      {items, total} = Ads.paginate_ad_accounts(user, per_page: 2, page: 1)
+      assert total == 3
+      assert length(items) == 2
+    end
+
+    test "tenant isolation: user B gets empty results" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      insert_ad_account_for_user(user_a)
+
+      {items, total} = Ads.paginate_ad_accounts(user_b)
+      assert total == 0
+      assert items == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # paginate_campaigns/2
+  # ---------------------------------------------------------------------------
+
+  describe "paginate_campaigns/2" do
+    test "returns correct items and total count" do
+      user = insert(:user)
+      aa = insert_ad_account_for_user(user)
+      for _ <- 1..3, do: insert_campaign_for_ad_account(aa)
+
+      mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+      {items, total} = Ads.paginate_campaigns(mc_ids, per_page: 2, page: 1)
+      assert total == 3
+      assert length(items) == 2
+    end
+
+    test "tenant isolation: user B gets empty results" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      aa_a = insert_ad_account_for_user(user_a)
+      insert_campaign_for_ad_account(aa_a)
+
+      mc_ids_b = Accounts.list_meta_connection_ids_for_user(user_b)
+      {items, total} = Ads.paginate_campaigns(mc_ids_b)
+      assert total == 0
+      assert items == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # paginate_ad_sets/2
+  # ---------------------------------------------------------------------------
+
+  describe "paginate_ad_sets/2" do
+    test "returns correct items and total count" do
+      user = insert(:user)
+      aa = insert_ad_account_for_user(user)
+      campaign = insert_campaign_for_ad_account(aa)
+      for _ <- 1..3, do: insert_ad_set_for(aa, campaign)
+
+      mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+      {items, total} = Ads.paginate_ad_sets(mc_ids, per_page: 2, page: 1)
+      assert total == 3
+      assert length(items) == 2
+    end
+
+    test "tenant isolation: user B gets empty results" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      aa_a = insert_ad_account_for_user(user_a)
+      campaign_a = insert_campaign_for_ad_account(aa_a)
+      insert_ad_set_for(aa_a, campaign_a)
+
+      mc_ids_b = Accounts.list_meta_connection_ids_for_user(user_b)
+      {items, total} = Ads.paginate_ad_sets(mc_ids_b)
+      assert total == 0
+      assert items == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # paginate_ads/2
+  # ---------------------------------------------------------------------------
+
+  describe "paginate_ads/2" do
+    test "returns correct items and total count" do
+      user = insert(:user)
+      aa = insert_ad_account_for_user(user)
+      campaign = insert_campaign_for_ad_account(aa)
+      ad_set = insert_ad_set_for(aa, campaign)
+      for _ <- 1..3, do: insert(:ad, ad_account: aa, ad_set: ad_set)
+
+      mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+      {items, total} = Ads.paginate_ads(mc_ids, per_page: 2, page: 1)
+      assert total == 3
+      assert length(items) == 2
+    end
+
+    test "tenant isolation: user B gets empty results" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      aa_a = insert_ad_account_for_user(user_a)
+      campaign_a = insert_campaign_for_ad_account(aa_a)
+      ad_set_a = insert_ad_set_for(aa_a, campaign_a)
+      insert(:ad, ad_account: aa_a, ad_set: ad_set_a)
+
+      mc_ids_b = Accounts.list_meta_connection_ids_for_user(user_b)
+      {items, total} = Ads.paginate_ads(mc_ids_b)
+      assert total == 0
+      assert items == []
     end
   end
 end

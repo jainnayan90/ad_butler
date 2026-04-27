@@ -119,13 +119,12 @@ config :ad_butler,
 
 config :ad_butler, AdButlerWeb.Endpoint, live_view: [signing_salt: "dev_lv_salt"]
 
+# Placeholder key for compile-time config evaluation (mix compile, mix format, etc.).
+# The real key is required at runtime — see config/runtime.exs for the CLOAK_KEY_DEV
+# validation that runs before the app starts. Generate a key with:
+#   openssl rand -base64 32
 cloak_key_dev =
-  Base.decode64!(
-    System.get_env(
-      "CLOAK_KEY_DEV",
-      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-    )
-  )
+  Base.decode64!(System.get_env("CLOAK_KEY_DEV", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
 
 if byte_size(cloak_key_dev) != 32 do
   raise "CLOAK_KEY_DEV must decode to exactly 32 bytes"

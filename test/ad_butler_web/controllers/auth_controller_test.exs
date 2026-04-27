@@ -61,7 +61,7 @@ defmodule AdButlerWeb.AuthControllerTest do
         |> Plug.Test.init_test_session(%{})
         |> put_session(:oauth_state, {state, System.system_time(:second)})
 
-      stub(ClientMock, :exchange_code, fn _code ->
+      expect(ClientMock, :exchange_code, 1, fn _code ->
         {:error, {:token_exchange_failed, "Invalid code"}}
       end)
 

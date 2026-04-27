@@ -335,4 +335,116 @@ defmodule AdButler.Meta.ClientTest do
       assert {:error, :meta_server_error} = Client.list_ad_accounts("token")
     end
   end
+
+  describe "get_insights/3" do
+    test "happy path: returns parsed rows with conversions extracted" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{
+          "data" => [
+            %{
+              "ad_id" => "ad_1",
+              "date_start" => "2026-04-01",
+              "spend" => "10.50",
+              "impressions" => "1000",
+              "clicks" => "25",
+              "reach" => "800",
+              "frequency" => "1.25",
+              "ctr" => "2.5",
+              "cpm" => "10.50",
+              "cpc" => "0.42",
+              "actions" => [
+                %{"action_type" => "offsite_conversion.fb_pixel_purchase", "value" => "3"},
+                %{"action_type" => "link_click", "value" => "25"}
+              ],
+              "action_values" => [
+                %{"action_type" => "offsite_conversion.fb_pixel_purchase", "value" => "150.00"}
+              ]
+            },
+            %{
+              "ad_id" => "ad_2",
+              "date_start" => "2026-04-01",
+              "spend" => "5.00",
+              "impressions" => "500",
+              "clicks" => "10",
+              "reach" => "400",
+              "frequency" => "1.25",
+              "ctr" => "2.0",
+              "cpm" => "10.00",
+              "cpc" => "0.50",
+              "actions" => nil,
+              "action_values" => nil
+            }
+          ]
+        })
+      end)
+
+      assert {:ok, [row1, row2]} = Client.get_insights("act_123", "token", [])
+
+      assert row1.ad_id == "ad_1"
+      assert row1.spend_cents == 1050
+      assert row1.impressions == 1000
+      assert row1.conversions == 3
+      assert row1.conversion_value_cents == 15_000
+
+      assert row2.ad_id == "ad_2"
+      assert row2.conversions == 0
+    end
+
+    test "400 insufficient permissions returns {:error, {:bad_request, _}}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        conn
+        |> Plug.Conn.put_status(400)
+        |> Req.Test.json(%{
+          "error" => %{
+            "message" => "Insufficient permissions",
+            "code" => 200
+          }
+        })
+      end)
+
+      assert {:error, {:bad_request, _}} = Client.get_insights("act_123", "token", [])
+    end
+
+    test "429 rate limit returns {:error, :rate_limit_exceeded}" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        conn
+        |> Plug.Conn.put_status(429)
+        |> Req.Test.json(%{})
+      end)
+
+      assert {:error, :rate_limit_exceeded} = Client.get_insights("act_123", "token", [])
+    end
+  end
+
+  describe "extract_conversions/1 (via get_insights)" do
+    test "sums only purchase action types from mixed actions list" do
+      Req.Test.stub(AdButler.Meta.Client, fn conn ->
+        Req.Test.json(conn, %{
+          "data" => [
+            %{
+              "ad_id" => "ad_x",
+              "date_start" => "2026-04-01",
+              "spend" => "0",
+              "impressions" => "0",
+              "clicks" => "0",
+              "reach" => "0",
+              "frequency" => "0",
+              "ctr" => "0",
+              "cpm" => "0",
+              "cpc" => "0",
+              "actions" => [
+                %{"action_type" => "purchase", "value" => "2"},
+                %{"action_type" => "offsite_conversion.fb_pixel_purchase", "value" => "5"},
+                %{"action_type" => "video_view", "value" => "100"}
+              ],
+              "action_values" => []
+            }
+          ]
+        })
+      end)
+
+      assert {:ok, [row]} = Client.get_insights("act_123", "token", [])
+      assert row.conversions == 7
+    end
+  end
 end
