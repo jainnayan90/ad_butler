@@ -1,71 +1,49 @@
-# Test Review: ad_butler test suite (Week 2)
+## Test Review — Pass 3
 
-**Status: PASS WITH WARNINGS | 0 Critical, 7 Warnings, 3 Suggestions**
+**Verdict: REQUIRES CHANGES — 1 Blocker · 2 Warnings · 4 Suggestions**
 
-All prior findings (T-C1–T-C4, T-W3, W8, S4, S5) confirmed fixed. Iron Laws clean.
-
-⚠️ EXTRACTED FROM AGENT MESSAGE (agent could not write to output_file)
+All prior pass findings resolved. New issues below.
 
 ---
 
-## Iron Law Violations
+## BLOCKER
 
-None.
+**B1 — DigestMailer total_count overflow branch never exercised**
+`test/ad_butler/notifications/digest_mailer_test.exs`
 
----
+`DigestMailer.build/4` has `total_count \\ nil`. When `total_count > length(findings)`, both `build_text_body/3` and `build_html_body/3` emit an overflow trailer. Every test uses 3-arity form — both overflow branches are permanently dead in tests. Was S1 in Pass 2 (not addressed).
 
-## Warnings
-
-### W1: `Process.sleep(100)` in DLQ replay test — race condition
-**`test/mix/tasks/replay_dlq_test.exs:36`**
-
-Races against RabbitMQ message routing; intermittently causes `dlq_count` to be non-zero. Replace with publisher confirms or a polling helper.
-
-### W2: `get_campaign!/2` missing happy-path test
-**`test/ad_butler/ads_test.exs:156`**
-
-Only the cross-tenant error case is tested. No test asserts a user can retrieve their own campaign. Compare `get_ad_account!/2` which tests both paths.
-
-### W3: `get_ad_set!/2` and `get_ad!/2` missing happy-path tests
-**`test/ad_butler/ads_test.exs:358,376`**
-
-Same asymmetry as W2 — only the cross-tenant raise is exercised.
-
-### W4: `list_ads/2` missing filter-option tests
-**`test/ad_butler/ads_test.exs:429`**
-
-`list_campaigns/2` and `list_ad_sets/2` cover filter opts. If `list_ads/2` accepts opts, those paths are uncovered.
-
-### W5: PublisherTest leaks AMQP connection on mid-test failure
-**`test/ad_butler/messaging/publisher_test.exs:25`**
-
-Raw `AMQP.Connection` opened for verification has no `on_exit` close guard. `start_supervised` only tears down the `Publisher` GenServer. Add `on_exit(fn -> AMQP.Connection.close(conn) end)`.
-
-### W6: `SyncAllConnectionsWorker` test doesn't assert string-key job args
-**`test/ad_butler/sync/scheduler_test.exs:33`**
-
-`all_enqueued(worker: FetchAdAccountsWorker)` only checks count. Should add `assert_enqueued(args: %{"meta_connection_id" => conn.id})` for each job to guard against atom-key regression.
-
-### W7: Integration test name is misleading
-**`test/integration/sync_pipeline_test.exs:20`**
-
-Named "full sync flow: fetch → publish → Broadway consumes → upserts campaigns" but `PublisherMock` returns `:ok` without routing to Broadway. Broadway consumption is tested separately in `metadata_pipeline_test.exs`. Rename to avoid confusion.
+Fix: add test `build(user, findings, "daily", 10)` with 2 findings → assert `"and 8 more findings"` in text_body and html_body.
 
 ---
 
-## Suggestions
+## WARNINGS
 
-### S1: `upsert_campaign/2` describe missing field assertion on insert
-**`test/ad_butler/ads_test.exs:173`**
+**W1 — "no active connections" test missing empty-queue assertion**
+`test/ad_butler/workers/digest_scheduler_worker_test.exs:39`
 
-First call result `{:ok, _}` is matched but no field is asserted. Add `assert campaign.meta_id == "campaign_001"`.
+Only `:ok` return checked. A bug enqueuing stale jobs would pass. Add `assert all_enqueued(worker: DigestWorker) == []`. Was in Pass 2, not yet fixed.
 
-### S2: `ad_set_factory/1` uses `struct/2` bypassing ExMachina attribute merging
-**`test/support/factory.ex:50`**
+**W2 — user_without_findings/0 and user_with_finding/1 duplicated verbatim**
+`test/ad_butler/notifications/notifications_test.exs:9-24` vs `test/ad_butler/workers/digest_worker_test.exs:10-25`
 
-`struct(AdSet, %{...})` skips `merge_attributes/2`. Unknown keys passed as overrides are silently dropped.
+Identical private helpers in two files. Extract to `test/support/notifications_fixtures.ex`. Was S3 in Pass 2, not yet fixed.
 
-### S3: `upsert_creative/2` tests omit `ad_account_id` assertion
-**`test/ad_butler/ads_test.exs:301`**
+---
 
-Both tests check `meta_id`/`name` but not `creative.ad_account_id == aa.id`.
+## SUGGESTIONS
+
+**S1 — CRLF header-injection guard untested**
+`test/ad_butler/notifications/digest_mailer_test.exs`
+`safe_display_name/1` CRLF-strip path never hit. Add: `name: "Bad\r\nActor"`, assert `\r`/`\n` absent from `email.to` display name.
+
+**S2 — 100-char truncation in safe_display_name/1 untested**
+Same function — `String.slice(0, 100)` on >100-char name has no coverage.
+
+**S3 — DigestWorker missing {:error, reason} clause and test**
+`lib/ad_butler/workers/digest_worker.ex:18-21`
+`case` only handles `:ok` and `{:skip, :no_findings}`. Mox-stubbed SMTP failure test needed.
+
+**S4 — Fan-out test never asserts exact job count**
+`test/ad_butler/workers/digest_scheduler_worker_test.exs:10-19`
+Two users checked individually; `length(all_enqueued(worker: DigestWorker)) == 2` not asserted.
