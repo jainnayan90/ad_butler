@@ -1,88 +1,51 @@
-# Security Audit: ad_butler (Week 2 — New Sync Pipeline + Ads Context)
+## Security Audit — Pass 3
 
-**Status: REQUIRES CHANGES | 1 High, 2 Medium, 4 Low**
-
-All prior findings (W1, W2, S1) confirmed fixed.
-
-⚠️ EXTRACTED FROM AGENT MESSAGE (agent could not write to output_file)
+**No Critical issues. 1 Medium · 4 Low. Major prior issues all fixed.**
 
 ---
 
-## High Severity
+## MEDIUM
 
-### H1: Broadway consumer not wired to configured RabbitMQ URL
-**`lib/ad_butler/sync/metadata_pipeline.ex:190-198`**
+**1. `period` interpolated unescaped into email subject, text, and HTML body**
+`lib/ad_butler/notifications/digest_mailer.ex:10, 40, 70`
 
-Producer spec passes only `queue:` and `qos:`, omitting `connection:`. `BroadwayRabbitMQ.Producer` defaults to `"amqp://guest:guest@localhost:5672"`, so consumption silently diverges from the broker used by `RabbitMQTopology.setup/0` and `Messaging.Publisher`, both of which correctly use `Application.fetch_env!(:ad_butler, :rabbitmq)[:url]`.
+Public `build/4` guards `period in ["daily", "weekly"]`. But `DigestWorker.perform/1` (`digest_worker.ex:12`) passes `args["period"]` straight through without re-validating. A forged Oban job (DB-compromise scenario) lets attacker-controlled HTML/CRLF reach `subject/1` and HTML body.
 
-**Fix**:
-```elixir
-url = Application.fetch_env!(:ad_butler, :rabbitmq)[:url]
-{BroadwayRabbitMQ.Producer,
- queue: @queue, connection: url, qos: [prefetch_count: 10]}
-```
-**OWASP**: A05 Security Misconfiguration
+Fix: Add `when period in ["daily", "weekly"]` guard to `DigestWorker.perform/1` with `{:cancel, "invalid period"}` fallback.
 
 ---
 
-## Medium Severity
+## LOW
 
-### M1: Session salts baked into Docker image layers
-**`Dockerfile:24-27`**
+**2. `safe_display_name/1` returns `""` for all-CRLF input — truthy in Elixir**
+`lib/ad_butler/notifications/digest_mailer.ex:11, 30`
 
-`ARG SESSION_SIGNING_SALT` + `ENV SESSION_SIGNING_SALT=${…}` persists salts in image layer metadata. Anyone with image read access can extract via `docker history --no-trunc`.
+After stripping CRLF, `""` is truthy in Elixir → `"" || user.email` evaluates to `""` → Swoosh receives `{"", user.email}` instead of falling back to email address.
 
-**Fix**: Use BuildKit secrets so values never land in a layer:
-```dockerfile
-# syntax=docker/dockerfile:1.4
-RUN --mount=type=secret,id=session_signing_salt \
-    --mount=type=secret,id=session_encryption_salt \
-    SESSION_SIGNING_SALT="$(cat /run/secrets/session_signing_salt)" \
-    SESSION_ENCRYPTION_SALT="$(cat /run/secrets/session_encryption_salt)" \
-    mix compile && mix release
-```
-**OWASP**: A02 Cryptographic Failures
+Fix: `if result == "", do: nil, else: result` (or `Enum.empty?`).
 
-### M2: /health/readiness query has no timeout — DB pool exhaustion risk
-**`lib/ad_butler_web/controllers/health_controller.ex:11-16`**
+**3. List-Unsubscribe non-actionable — no per-user token, no One-Click header**
+`lib/ad_butler/notifications/digest_mailer.ex:17`
 
-`SQL.query(Repo, "SELECT 1", [])` uses default 15s timeout. PlugAttack allows 60 req/min/IP; with `pool_size: 10`, ~20 IPs can hold the pool and starve real traffic.
+Hardcoded `<mailto:unsubscribe@adbutler.app>` fails Gmail/Yahoo bulk-sender requirements (Feb 2024 mandate for >5k/day) and is spoofable without a signed token. Add signed token + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` before scaling.
 
-**Fix**: `SQL.query(Repo, "SELECT 1", [], timeout: 1_000, queue_target: 200)` and tighten health rate limit to 10-20/min/IP.
+**4. SMTP error reason may leak recipient email to Oban error logs**
+`lib/ad_butler/notifications.ex:25-28`
 
----
+`{:error, reason}` propagated to Oban; SMTP `RCPT TO:` failure strings often contain the recipient address. Oban failure logging bypasses `:filter_parameters`. Fix: redact via `AdButler.Log.redact/1` and return `{:error, :delivery_failed}`.
 
-## Low Severity
+**5. TLS hardening: missing explicit versions and hostname match fun**
+`config/runtime.exs` (SMTP TLS config)
 
-### L1: `get_ad_account_for_sync/1` bypasses tenant scope
-**`lib/ad_butler/ads.ex:49-51`**
-
-Documented; used only after `Ecto.UUID.cast/1` validation. Consider renaming to `unsafe_get_ad_account_for_sync/1` to make the bypass loud at call sites.
-
-### L2: `handle_message/3` only validates `ad_account_id`
-**`lib/ad_butler/sync/metadata_pipeline.ex:29-42`**
-
-Safe today; add allow-list if future code branches on `sync_type`.
-
-### L3: `raw_jsonb` fields store untrusted Meta Graph responses
-**`lib/ad_butler/ads/*.ex`**
-
-Safe under HEEx auto-escape but must never be passed to `raw/1`. Team convention needed.
-
-### L4: `apply_*_filters/2` silently swallows unknown filter keys
-**`lib/ad_butler/ads.ex:182-188, 232-238, 271-277`**
-
-Tenant isolation still enforced by outer `scope/2`. Consider `raise ArgumentError` on unknown keys in dev.
+Correct: `verify_peer`, `cacerts_get()`, SNI, `depth: 3`. Missing: `versions: [:"tlsv1.2", :"tlsv1.3"]` and `customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]`.
 
 ---
 
-## Security Posture — Passing
+## Verified Clean
 
-- Tenant isolation: all user-facing reads go through `scope/2`/`scope_ad_account/2`
-- SQL injection: all queries use `^` pins, no `fragment("…#{}…")`
-- XSS: no `raw/1` in `lib/`
-- CSRF: `:protect_from_forgery` + CSP in router
-- Atom exhaustion: no `String.to_atom/1` on user input
-- Session cookies: `http_only`, `secure`, `same_site: "Lax"`
-- Secrets: `:filter_parameters` extended, `@derive {Inspect, except: [:access_token]}` on MetaConnection
-- Oban args: string keys throughout
+- Tenant isolation: `scope_findings/2` filters by `ad_account_id in ^list_ad_account_ids_for_user(user)` — no cross-tenant leak
+- Oban job forgery: recipient email derives from DB lookup of user_id, not from job args
+- Email content escaping: `f.title` via `h/1`; `f.severity` safe (DB-constrained)
+- Header injection: `safe_display_name/1` strips `\r\n\0`, slices to 100 chars
+- filter_parameters: email, smtp_password, smtp_username added
+- Logger metadata: only user_id, period, chunk_size — no PII

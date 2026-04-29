@@ -61,6 +61,32 @@ defmodule AdButler.Analytics do
     |> Repo.get!(id)
   end
 
+  @doc """
+  Returns up to `limit` high- and medium-severity findings for `user` since `since`,
+  plus the total count of matching findings.
+
+  Scoped to the user's ad accounts — one user cannot see another's findings.
+  Returns `{findings, total_count}`.
+  """
+  @spec list_high_medium_findings_since(User.t(), DateTime.t(), pos_integer()) ::
+          {[Finding.t()], non_neg_integer()}
+  def list_high_medium_findings_since(%User{} = user, %DateTime{} = since, limit \\ 50) do
+    base =
+      Finding
+      |> scope_findings(user)
+      |> where([f], f.severity in ["high", "medium"] and f.inserted_at >= ^since)
+
+    total = Repo.aggregate(base, :count, :id)
+
+    findings =
+      base
+      |> order_by([f], desc: f.inserted_at)
+      |> limit(^limit)
+      |> Repo.all()
+
+    {findings, total}
+  end
+
   @doc "Returns `{:ok, finding}` for the finding with `id` scoped to `user`, or `{:error, :not_found}` if missing, not owned, or `id` is not a valid UUID."
   @spec get_finding(User.t(), binary()) :: {:ok, Finding.t()} | {:error, :not_found}
   def get_finding(%User{} = user, id) do

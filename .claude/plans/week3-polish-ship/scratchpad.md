@@ -1,4 +1,3 @@
-
 ## API Failure — 2026-04-29 19:32
 
 Turn ended due to API error. Check progress.md for last completed task.

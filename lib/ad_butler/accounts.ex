@@ -257,6 +257,15 @@ defmodule AdButler.Accounts do
     |> Repo.all()
   end
 
+  @doc "Returns id-only User structs for all users with at least one active MetaConnection. Used by digest scheduler."
+  @spec list_users_with_active_connections() :: [User.t()]
+  def list_users_with_active_connections do
+    active_user_ids =
+      from(mc in MetaConnection, where: mc.status == "active", select: mc.user_id, distinct: true)
+
+    Repo.all(from u in User, where: u.id in subquery(active_user_ids), select: %User{id: u.id})
+  end
+
   @doc "Runs `fun` inside a transaction with a stream of active MetaConnections."
   @spec stream_connections_and_run((Enumerable.t() -> any()), keyword()) ::
           {:ok, any()} | {:error, term()}
