@@ -76,6 +76,12 @@ defmodule AdButlerWeb.Layouts do
               label="Ads"
               active={@active_nav == :ads}
             />
+            <.nav_item
+              href={~p"/findings"}
+              icon="hero-flag"
+              label="Findings"
+              active={@active_nav == :findings}
+            />
           </nav>
 
           <div class="shrink-0 px-3 py-4 border-t border-gray-200">

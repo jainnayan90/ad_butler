@@ -74,6 +74,25 @@ if failed > 0, do: Logger.warning("Some jobs failed to insert", count: failed)
 :ok
 ```
 
+### Counting DB-level conflicts (Basic Engine, Oban 2.18+)
+
+The Basic Engine uses `on_conflict: :nothing, returning: true` internally. Conflicting
+rows are **absent** from the returned list (not nil). Use length arithmetic:
+
+```elixir
+results = Oban.insert_all(valid)
+not_inserted = length(valid) - length(results)
+if not_inserted > 0 do
+  Logger.info("audit_scheduler: jobs not inserted (db conflict)", count: not_inserted)
+end
+Logger.info("audit_scheduler enqueued jobs", count: length(results))
+```
+
+**Caution**: `match?({:error, _}, &1)` never matches — do not use as a failure filter.
+The count reflects DB-level `on_conflict: :nothing` skips, not Oban application-level
+unique resolution. In tests, the `inline` engine may return all rows regardless of
+conflicts, so `not_inserted` will be `0` in test even when dedup fires in production.
+
 ### Files Changed
 
 - `lib/ad_butler/workers/sync_all_connections_worker.ex` — Removed case, bare insert + :ok

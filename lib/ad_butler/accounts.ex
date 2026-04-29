@@ -163,6 +163,15 @@ defmodule AdButler.Accounts do
     |> Repo.stream(max_rows: chunk_size)
   end
 
+  @doc "Returns the IDs of all active `MetaConnection` records across all users. Internal scheduler use only."
+  @spec list_all_active_meta_connection_ids() :: [binary()]
+  def list_all_active_meta_connection_ids do
+    MetaConnection
+    |> where([mc], mc.status == "active")
+    |> select([mc], mc.id)
+    |> Repo.all()
+  end
+
   @doc "Returns the IDs of all active `MetaConnection` records belonging to `user`."
   @spec list_meta_connection_ids_for_user(User.t()) :: [binary()]
   def list_meta_connection_ids_for_user(%User{id: user_id}) do
@@ -170,6 +179,15 @@ defmodule AdButler.Accounts do
     |> where([mc], mc.user_id == ^user_id and mc.status == "active")
     |> select([mc], mc.id)
     |> Repo.all()
+  end
+
+  @doc "Returns an Ecto subquery of active MetaConnection IDs for `user`. Use with `Ecto.Query.subquery/1` to compose into a single SQL statement."
+  @spec list_meta_connection_ids_query(User.t()) :: Ecto.Query.t()
+  def list_meta_connection_ids_query(%User{id: user_id}) do
+    from(mc in MetaConnection,
+      where: mc.user_id == ^user_id and mc.status == "active",
+      select: mc.id
+    )
   end
 
   @doc "Returns all active `MetaConnection` records belonging to `user`."

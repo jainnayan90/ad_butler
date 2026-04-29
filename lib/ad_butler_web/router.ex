@@ -67,6 +67,8 @@ defmodule AdButlerWeb.Router do
       live "/campaigns", CampaignsLive
       live "/ad-sets", AdSetsLive
       live "/ads", AdsLive
+      live "/findings", FindingsLive
+      live "/findings/:id", FindingDetailLive
     end
 
     get "/dashboard", AuthController, :dashboard_redirect

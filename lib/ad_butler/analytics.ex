@@ -1,14 +1,191 @@
 defmodule AdButler.Analytics do
   @moduledoc """
-  Context for managing materialized view refreshes and `insights_daily` partition lifecycle.
+  Context for analytics data — materialized view refreshes, `insights_daily` partition
+  lifecycle, findings, and ad health scores.
 
-  Called by `MatViewRefreshWorker` and `PartitionManagerWorker` — workers must not
-  call `Repo` directly.
+  Called by `MatViewRefreshWorker`, `PartitionManagerWorker`, and `BudgetLeakAuditorWorker`.
+  Workers must not call `Repo` directly. All user-facing finding queries scope to the
+  requesting user's MetaConnection IDs so one user can never access another's data.
   """
+
+  import Ecto.Query
 
   require Logger
 
+  alias AdButler.Accounts.User
+  alias AdButler.Ads
+  alias AdButler.Analytics.{AdHealthScore, Finding}
   alias AdButler.Repo
+
+  # ---------------------------------------------------------------------------
+  # Findings — user-facing (scoped)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns a page of findings for `user` and the total count matching the filters.
+
+  Options:
+  - `:page` — 1-based page number (default: `1`)
+  - `:per_page` — records per page (default: `50`)
+  - `:severity` — filter to `"low"`, `"medium"`, or `"high"`
+  - `:kind` — filter to a specific kind (e.g. `"dead_spend"`)
+  - `:ad_account_id` — filter to a specific ad account UUID
+  """
+  @spec paginate_findings(User.t(), keyword()) :: {[Finding.t()], non_neg_integer()}
+  def paginate_findings(%User{} = user, opts \\ []) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 50)
+
+    base =
+      Finding
+      |> scope_findings(user)
+      |> apply_finding_filters(opts)
+
+    total = Repo.aggregate(base, :count)
+
+    items =
+      base
+      |> order_by([f], desc: f.inserted_at)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    {items, total}
+  end
+
+  @doc "Returns the finding with `id` scoped to `user`. Raises `Ecto.NoResultsError` if not found or not owned."
+  @spec get_finding!(User.t(), binary()) :: Finding.t()
+  def get_finding!(%User{} = user, id) do
+    Finding
+    |> scope_findings(user)
+    |> Repo.get!(id)
+  end
+
+  @doc "Returns `{:ok, finding}` for the finding with `id` scoped to `user`, or `{:error, :not_found}` if missing, not owned, or `id` is not a valid UUID."
+  @spec get_finding(User.t(), binary()) :: {:ok, Finding.t()} | {:error, :not_found}
+  def get_finding(%User{} = user, id) do
+    case Finding |> scope_findings(user) |> Repo.get(id) do
+      nil -> {:error, :not_found}
+      finding -> {:ok, finding}
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
+  end
+
+  @doc """
+  Marks a finding as acknowledged by `user`. Sets `acknowledged_at` and
+  `acknowledged_by_user_id`. Idempotent — re-acknowledging overwrites with current time.
+
+  Returns `{:ok, Finding.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}`.
+  """
+  @spec acknowledge_finding(User.t(), binary()) ::
+          {:ok, Finding.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+  def acknowledge_finding(%User{} = user, finding_id) do
+    with {:ok, finding} <- get_finding(user, finding_id) do
+      finding
+      |> Finding.acknowledge_changeset(user.id)
+      |> Repo.update()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Findings — internal (no scope, called by auditor worker)
+  # ---------------------------------------------------------------------------
+
+  @doc "Creates a finding from `attrs`. Internal use only — no tenant scope check."
+  @spec create_finding(map()) :: {:ok, Finding.t()} | {:error, Ecto.Changeset.t()}
+  def create_finding(attrs) do
+    %Finding{}
+    |> Finding.create_changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Returns the open (unresolved) finding for `(ad_id, kind)`, or `nil` if none exists.
+  Internal use — called by the auditor worker for deduplication.
+  """
+  @spec get_unresolved_finding(binary(), String.t()) :: Finding.t() | nil
+  def get_unresolved_finding(ad_id, kind) do
+    Repo.one(
+      from f in Finding,
+        where: f.ad_id == ^ad_id and f.kind == ^kind and is_nil(f.resolved_at),
+        limit: 1
+    )
+  end
+
+  @doc "Returns a MapSet of {ad_id, kind} tuples for all open (unresolved) findings for the given ad_ids. INTERNAL — not tenant-scoped, worker-only. Never call from user-facing code."
+  @spec unsafe_list_open_finding_keys([binary()]) :: MapSet.t()
+  def unsafe_list_open_finding_keys([]), do: MapSet.new()
+
+  def unsafe_list_open_finding_keys(ad_ids) do
+    from(f in Finding,
+      where: f.ad_id in ^ad_ids and is_nil(f.resolved_at),
+      select: {f.ad_id, f.kind}
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  # ---------------------------------------------------------------------------
+  # AdHealthScore — internal (no scope, called by auditor worker)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Inserts a new health score row for `ad_id`. Append-only — never updates existing rows.
+  Each call inserts a new row.
+  Returns `{:ok, AdHealthScore.t()} | {:error, Ecto.Changeset.t()}`.
+  """
+  @spec insert_ad_health_score(map()) :: {:ok, AdHealthScore.t()} | {:error, Ecto.Changeset.t()}
+  def insert_ad_health_score(attrs) do
+    %AdHealthScore{}
+    |> AdHealthScore.changeset(attrs)
+    |> Repo.insert(
+      on_conflict: {:replace, [:leak_score, :leak_factors, :inserted_at]},
+      conflict_target: [:ad_id, :computed_at]
+    )
+  end
+
+  @doc "Bulk-upserts health scores. DB errors raise; Oban retries the job."
+  @spec bulk_insert_health_scores([map()]) :: :ok
+  def bulk_insert_health_scores([]), do: :ok
+
+  def bulk_insert_health_scores(entries) do
+    {count, _} =
+      Repo.insert_all(
+        AdHealthScore,
+        entries,
+        on_conflict: {:replace, [:leak_score, :leak_factors, :inserted_at]},
+        conflict_target: [:ad_id, :computed_at]
+      )
+
+    if count == 0 do
+      Logger.warning("bulk_insert_health_scores: 0 rows written", count: length(entries))
+    end
+
+    :ok
+  end
+
+  @doc """
+  Returns the most recent `AdHealthScore` for `ad_id`, or `nil` if none exists.
+
+  **UNSAFE — no tenant scope.** Callers MUST verify that the requesting user owns
+  the ad before invoking this function. The required invariant: call `get_finding/2`
+  or `get_finding!/2` first and only proceed on success — those functions enforce
+  the tenant scope that this function intentionally skips.
+  """
+  @spec unsafe_get_latest_health_score(binary()) :: AdHealthScore.t() | nil
+  def unsafe_get_latest_health_score(ad_id) do
+    Repo.one(
+      from s in AdHealthScore,
+        where: s.ad_id == ^ad_id,
+        order_by: [desc: s.computed_at],
+        limit: 1
+    )
+  end
+
+  # ---------------------------------------------------------------------------
+  # Materialized views + partition lifecycle
+  # ---------------------------------------------------------------------------
 
   @doc ~S[Refreshes the materialized view for the given period (`"7d"` or `"30d"`).
 Returns `{:error, "unknown view: ..."}` for unknown period strings.
@@ -83,7 +260,30 @@ Raises `Postgrex.Error` or `DBConnection.ConnectionError` on database failure.]
     :ok
   end
 
-  # --- private ---
+  # ---------------------------------------------------------------------------
+  # Private
+  # ---------------------------------------------------------------------------
+
+  defp scope_findings(queryable, %User{} = user) do
+    ad_account_ids = Ads.list_ad_account_ids_for_user(user)
+    where(queryable, [f], f.ad_account_id in ^ad_account_ids)
+  end
+
+  defp apply_finding_filters(queryable, opts) do
+    Enum.reduce(opts, queryable, fn
+      {:severity, s}, q when is_binary(s) and s != "" ->
+        where(q, [f], f.severity == ^s)
+
+      {:kind, k}, q when is_binary(k) and k != "" ->
+        where(q, [f], f.kind == ^k)
+
+      {:ad_account_id, id}, q when is_binary(id) and id != "" ->
+        where(q, [f], f.ad_account_id == ^id)
+
+      _, q ->
+        q
+    end)
+  end
 
   defp do_refresh(view_name) do
     safe_name = safe_identifier!(view_name)
