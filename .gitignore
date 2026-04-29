@@ -38,4 +38,5 @@ npm-debug.log
 scripts
 WORKFLOW.md
 .envrc
+.env.docker
 structure.sql

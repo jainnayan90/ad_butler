@@ -18,6 +18,8 @@ defmodule AdButler.Workers.InsightsSchedulerWorker do
 
   alias AdButler.Ads
 
+  @insights_exchange "ad_butler.insights.fanout"
+
   @doc "Publishes one delivery sync message per active ad account."
   @impl Oban.Worker
   def perform(_job) do
@@ -80,7 +82,7 @@ defmodule AdButler.Workers.InsightsSchedulerWorker do
   end
 
   defp publish_payload(payload) do
-    case publisher().publish(payload) do
+    case publisher().publish(payload, @insights_exchange) do
       :ok ->
         :ok
 

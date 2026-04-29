@@ -19,22 +19,28 @@ defmodule AdButler.Messaging.PublisherPool do
   alias AdButler.Messaging.Publisher
 
   @registry AdButler.Messaging.PublisherPool.Registry
+  @default_exchange "ad_butler.sync.fanout"
 
   @doc "Starts the PublisherPool supervisor."
   def start_link(_opts \\ []) do
     Supervisor.start_link(__MODULE__, [], name: __MODULE__)
   end
 
-  @doc "Publishes `payload` via a round-robin selected pool worker. Returns `{:error, :not_connected}` if the selected worker has no AMQP channel."
+  @doc "Publishes `payload` to the default sync fanout exchange via a round-robin selected pool worker. Returns `{:error, :not_connected}` if the selected worker has no AMQP channel."
   @impl AdButler.Messaging.PublisherBehaviour
   @spec publish(binary()) :: :ok | {:error, term()}
-  def publish(payload) do
+  def publish(payload), do: publish(payload, @default_exchange)
+
+  @doc "Publishes `payload` to `exchange` via a round-robin selected pool worker. Returns `{:error, :not_connected}` if the selected worker has no AMQP channel."
+  @impl AdButler.Messaging.PublisherBehaviour
+  @spec publish(binary(), String.t()) :: :ok | {:error, term()}
+  def publish(payload, exchange) when is_binary(exchange) do
     pool_size = :persistent_term.get({__MODULE__, :pool_size})
     counter = :persistent_term.get({__MODULE__, :counter})
     index = rem(:atomics.add_get(counter, 1, 1), pool_size)
 
     case Registry.lookup(@registry, index) do
-      [{pid, _}] -> GenServer.call(pid, {:publish, payload})
+      [{pid, _}] -> GenServer.call(pid, {:publish, payload, exchange})
       [] -> {:error, :not_connected}
     end
   end

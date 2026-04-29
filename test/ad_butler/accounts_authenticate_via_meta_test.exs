@@ -10,7 +10,7 @@ defmodule AdButler.AccountsAuthenticateViaMetaTest do
   setup :verify_on_exit!
 
   describe "authenticate_via_meta/1" do
-    test "happy path returns {:ok, user, meta_connection} for new user" do
+    test "happy path returns {:ok, user, meta_connection, :new} for new user" do
       n = System.unique_integer([:positive])
 
       expect(ClientMock, :exchange_code, fn _code ->
@@ -21,10 +21,27 @@ defmodule AdButler.AccountsAuthenticateViaMetaTest do
         {:ok, %{meta_user_id: "#{n}", name: "Test User", email: "testuser_#{n}@example.com"}}
       end)
 
-      assert {:ok, %Accounts.User{} = user, %Accounts.MetaConnection{}} =
+      assert {:ok, %Accounts.User{} = user, %Accounts.MetaConnection{}, :new} =
                Accounts.authenticate_via_meta("auth_code")
 
       assert user.name == "Test User"
+    end
+
+    test "returns :existing on reauth (same meta_user_id)" do
+      n = System.unique_integer([:positive])
+      meta_user_id = "#{n}"
+
+      stub(ClientMock, :exchange_code, fn _code ->
+        {:ok, %{access_token: "test_token", expires_in: 86_400}}
+      end)
+
+      stub(ClientMock, :get_me, fn _token ->
+        {:ok,
+         %{meta_user_id: meta_user_id, name: "Test User", email: "testuser_#{n}@example.com"}}
+      end)
+
+      assert {:ok, _user, _conn, :new} = Accounts.authenticate_via_meta("auth_code")
+      assert {:ok, _user, _conn, :existing} = Accounts.authenticate_via_meta("auth_code")
     end
 
     test "returns error when token exchange fails" do

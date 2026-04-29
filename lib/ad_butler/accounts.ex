@@ -15,11 +15,13 @@ defmodule AdButler.Accounts do
 
   @doc """
   Exchanges a Meta OAuth `code` for a long-lived token, upserts the user, and
-  creates or updates their `MetaConnection`. Returns `{:ok, user, connection}` on
-  success or `{:error, reason}` if the token exchange or any DB step fails.
+  creates or updates their `MetaConnection`. Returns
+  `{:ok, user, connection, :new | :existing}` on success — `:new` when the
+  connection was just created for the first time, `:existing` on a reauth —
+  or `{:error, reason}` if the token exchange or any DB step fails.
   """
   @spec authenticate_via_meta(String.t()) ::
-          {:ok, User.t(), MetaConnection.t()} | {:error, term()}
+          {:ok, User.t(), MetaConnection.t(), :new | :existing} | {:error, term()}
   def authenticate_via_meta(code) do
     with {:ok, %{access_token: token, expires_in: expires_in}} <-
            meta_client().exchange_code(code),
@@ -28,6 +30,17 @@ defmodule AdButler.Accounts do
         Ecto.Multi.new()
         |> Ecto.Multi.run(:user, fn _repo, _changes ->
           create_or_update_user(user_info)
+        end)
+        |> Ecto.Multi.run(:connection_exists, fn repo, %{user: user} ->
+          exists =
+            repo.exists?(
+              from mc in MetaConnection,
+                where:
+                  mc.user_id == ^user.id and
+                    mc.meta_user_id == ^to_string(user_info[:meta_user_id])
+            )
+
+          {:ok, exists}
         end)
         |> Ecto.Multi.run(:conn_record, fn _repo, %{user: user} ->
           create_meta_connection(user, %{
@@ -41,8 +54,11 @@ defmodule AdButler.Accounts do
         |> Repo.transaction()
 
       case result do
-        {:ok, %{user: user, conn_record: conn_record}} -> {:ok, user, conn_record}
-        {:error, _step, reason, _changes} -> {:error, reason}
+        {:ok, %{user: user, conn_record: conn_record, connection_exists: existed}} ->
+          {:ok, user, conn_record, if(existed, do: :existing, else: :new)}
+
+        {:error, _step, reason, _changes} ->
+          {:error, reason}
       end
     end
   end
