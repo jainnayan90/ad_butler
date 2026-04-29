@@ -57,9 +57,9 @@ defmodule AdButlerWeb.AuthController do
 
   def callback(conn, %{"code" => code, "state" => state}) do
     with {:ok, verified_conn} <- verify_state(conn, state),
-         {:ok, user, conn_record} <- Accounts.authenticate_via_meta(code) do
+         {:ok, user, conn_record, auth_status} <- Accounts.authenticate_via_meta(code) do
       Logger.info("OAuth success", user_id: user.id)
-      Scheduler.schedule_sync_for_connection(conn_record)
+      if auth_status == :new, do: Scheduler.schedule_sync_for_connection(conn_record)
 
       verified_conn
       |> clear_session()

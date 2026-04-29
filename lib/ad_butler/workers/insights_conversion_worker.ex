@@ -17,6 +17,8 @@ defmodule AdButler.Workers.InsightsConversionWorker do
 
   alias AdButler.Ads
 
+  @insights_exchange "ad_butler.insights.fanout"
+
   @doc "Publishes one conversions sync message per active ad account."
   @impl Oban.Worker
   def perform(_job) do
@@ -39,7 +41,7 @@ defmodule AdButler.Workers.InsightsConversionWorker do
   def timeout(_job), do: :timer.minutes(6)
 
   defp publish_and_accumulate(payload, {n, errs}) do
-    case publisher().publish(payload) do
+    case publisher().publish(payload, @insights_exchange) do
       :ok ->
         {n + 1, errs}
 

@@ -437,9 +437,17 @@ defmodule AdButler.Ads do
 
   defp apply_ad_set_filters(queryable, opts) do
     Enum.reduce(opts, queryable, fn
-      {:ad_account_id, id}, q -> where(q, [s], s.ad_account_id == ^id)
-      {:campaign_id, id}, q -> where(q, [s], s.campaign_id == ^id)
-      _, q -> q
+      {:ad_account_id, id}, q ->
+        where(q, [s], s.ad_account_id == ^id)
+
+      {:campaign_id, id}, q ->
+        where(q, [s], s.campaign_id == ^id)
+
+      {:status, status}, q when is_binary(status) and status != "" ->
+        where(q, [s], s.status == ^status)
+
+      _, q ->
+        q
     end)
   end
 
@@ -551,9 +559,17 @@ defmodule AdButler.Ads do
 
   defp apply_ad_filters(queryable, opts) do
     Enum.reduce(opts, queryable, fn
-      {:ad_account_id, id}, q -> where(q, [a], a.ad_account_id == ^id)
-      {:ad_set_id, id}, q -> where(q, [a], a.ad_set_id == ^id)
-      _, q -> q
+      {:ad_account_id, id}, q ->
+        where(q, [a], a.ad_account_id == ^id)
+
+      {:ad_set_id, id}, q ->
+        where(q, [a], a.ad_set_id == ^id)
+
+      {:status, status}, q when is_binary(status) and status != "" ->
+        where(q, [a], a.status == ^status)
+
+      _, q ->
+        q
     end)
   end
 
@@ -597,8 +613,16 @@ defmodule AdButler.Ads do
   def bulk_upsert_insights(rows) when is_list(rows) do
     now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
 
+    # Meta sometimes returns multiple records for the same (ad_id, date_start);
+    # Postgres ON CONFLICT cannot resolve duplicates within a single statement,
+    # so we keep the last occurrence per key.
     entries =
-      Enum.map(rows, fn row ->
+      rows
+      |> Enum.reduce(%{}, fn row, acc ->
+        Map.put(acc, {row.ad_id, row.date_start}, row)
+      end)
+      |> Map.values()
+      |> Enum.map(fn row ->
         row
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)
@@ -630,8 +654,11 @@ defmodule AdButler.Ads do
     {:ok, count}
   rescue
     e in Postgrex.Error ->
-      Logger.error("bulk_upsert_insights failed", reason: Exception.message(e))
-      {:error, :upsert_failed}
+      Logger.error("bulk_upsert_insights failed: #{Exception.message(e)}",
+        reason: Exception.message(e)
+      )
+
+      {:error, {:upsert_failed, Exception.message(e)}}
   end
 
   @doc "UNSAFE — queries the `ad_insights_7d` view directly by `ad_id` without tenant scope. Caller must verify `ad_id` ownership before calling."

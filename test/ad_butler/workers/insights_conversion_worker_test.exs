@@ -22,7 +22,8 @@ defmodule AdButler.Workers.InsightsConversionWorkerTest do
       insert(:ad_account)
       insert(:ad_account)
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn payload ->
+      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn payload, exchange ->
+        assert exchange == "ad_butler.insights.fanout"
         decoded = Jason.decode!(payload)
         assert decoded["sync_type"] == "conversions"
         assert Map.has_key?(decoded, "ad_account_id")
@@ -37,7 +38,7 @@ defmodule AdButler.Workers.InsightsConversionWorkerTest do
       accounts = Enum.map(1..3, fn _ -> insert(:ad_account) end)
       jitters = Enum.map(accounts, fn aa -> rem(:erlang.phash2(aa.meta_id), 1800) end)
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn _payload -> :ok end)
+      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn _payload, _exchange -> :ok end)
 
       assert :ok = perform_job(InsightsConversionWorker, %{})
 
@@ -50,7 +51,7 @@ defmodule AdButler.Workers.InsightsConversionWorkerTest do
       insert(:ad_account)
       insert(:ad_account, status: "PAUSED")
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 1, fn payload ->
+      expect(AdButler.Messaging.PublisherMock, :publish, 1, fn payload, _exchange ->
         decoded = Jason.decode!(payload)
         assert decoded["sync_type"] == "conversions"
         :ok
@@ -62,7 +63,7 @@ defmodule AdButler.Workers.InsightsConversionWorkerTest do
     test "returns {:error, reason} when publish fails" do
       insert(:ad_account)
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 1, fn _payload ->
+      expect(AdButler.Messaging.PublisherMock, :publish, 1, fn _payload, _exchange ->
         {:error, :down}
       end)
 

@@ -47,8 +47,14 @@ defmodule AdButler.Application do
           [
             AdButler.Messaging.PublisherPool,
             AdButler.Sync.MetadataPipeline,
-            {AdButler.Sync.InsightsPipeline, queue: "ad_butler.insights.delivery"},
-            {AdButler.Sync.InsightsPipeline, queue: "ad_butler.insights.conversions"}
+            Supervisor.child_spec(
+              {AdButler.Sync.InsightsPipeline, queue: "ad_butler.insights.delivery"},
+              id: :insights_pipeline_delivery
+            ),
+            Supervisor.child_spec(
+              {AdButler.Sync.InsightsPipeline, queue: "ad_butler.insights.conversions"},
+              id: :insights_pipeline_conversions
+            )
           ]
         else
           []
@@ -58,16 +64,13 @@ defmodule AdButler.Application do
           AdButlerWeb.Endpoint
         ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
+    # Queues must exist before Broadway pipelines subscribe — run synchronously first.
+    if env != :test, do: setup_rabbitmq_topology()
+
     opts = [strategy: :one_for_one, name: AdButler.Supervisor]
     result = Supervisor.start_link(children, opts)
 
     :ok = UsageHandler.attach()
-
-    if env != :test do
-      Task.Supervisor.start_child(AdButler.TaskSupervisor, &setup_rabbitmq_topology/0)
-    end
 
     result
   end

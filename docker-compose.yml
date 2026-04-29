@@ -34,10 +34,10 @@ services:
       - "5672:5672"
       - "15672:15672" # management UI — http://localhost:15672 (guest/guest)
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 15
 
   app:
     build:
@@ -60,6 +60,7 @@ services:
       META_APP_ID: ${META_APP_ID:-}
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_OAUTH_CALLBACK_URL: ${META_OAUTH_CALLBACK_URL:-http://localhost:4000/auth/meta/callback}
+      CLOAK_KEY_DEV: ${CLOAK_KEY_DEV}
     depends_on:
       db:
         condition: service_healthy

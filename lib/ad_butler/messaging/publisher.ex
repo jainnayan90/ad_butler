@@ -27,10 +27,15 @@ defmodule AdButler.Messaging.Publisher do
   end
 
   @impl AdButler.Messaging.PublisherBehaviour
-  @doc "Publishes `payload` to the sync fanout exchange. Returns `{:error, :not_connected}` if the AMQP channel is not yet up."
+  @doc "Publishes `payload` to the default sync fanout exchange (`ad_butler.sync.fanout`). Returns `{:error, :not_connected}` if the AMQP channel is not yet up."
   @spec publish(binary()) :: :ok | {:error, term()}
-  def publish(payload) do
-    GenServer.call(__MODULE__, {:publish, payload})
+  def publish(payload), do: publish(payload, @exchange)
+
+  @impl AdButler.Messaging.PublisherBehaviour
+  @doc "Publishes `payload` to `exchange`. Returns `{:error, :not_connected}` if the AMQP channel is not yet up."
+  @spec publish(binary(), String.t()) :: :ok | {:error, term()}
+  def publish(payload, exchange) when is_binary(exchange) do
+    GenServer.call(__MODULE__, {:publish, payload, exchange})
   end
 
   @doc "Suspends the caller until the AMQP channel is open or `timeout` milliseconds elapse."
@@ -74,12 +79,12 @@ defmodule AdButler.Messaging.Publisher do
     {:noreply, %{state | pending_connected: [from | pending]}}
   end
 
-  def handle_call({:publish, _payload}, _from, %{channel: nil} = state) do
+  def handle_call({:publish, _payload, _exchange}, _from, %{channel: nil} = state) do
     {:reply, {:error, :not_connected}, state}
   end
 
-  def handle_call({:publish, payload}, _from, %{channel: channel} = state) do
-    result = @amqp_basic.publish(channel, @exchange, "", payload, persistent: true)
+  def handle_call({:publish, payload, exchange}, _from, %{channel: channel} = state) do
+    result = @amqp_basic.publish(channel, exchange, "", payload, persistent: true)
     {:reply, result, state}
   end
 

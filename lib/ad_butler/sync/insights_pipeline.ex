@@ -45,6 +45,8 @@ defmodule AdButler.Sync.InsightsPipeline do
 
   @impl Broadway
   def handle_message(_processor, %Message{data: data} = message, _context) do
+    Logger.debug("handle_message received", data: data)
+
     with {:ok, %{"ad_account_id" => raw_id, "sync_type" => sync_type}} <- Jason.decode(data),
          true <- sync_type in ["delivery", "conversions"],
          {:ok, ad_account_id} <- Ecto.UUID.cast(raw_id),

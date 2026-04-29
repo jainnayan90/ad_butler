@@ -22,7 +22,8 @@ defmodule AdButler.Workers.InsightsSchedulerWorkerTest do
       insert(:ad_account)
       insert(:ad_account)
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn payload ->
+      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn payload, exchange ->
+        assert exchange == "ad_butler.insights.fanout"
         decoded = Jason.decode!(payload)
         assert decoded["sync_type"] == "delivery"
         assert Map.has_key?(decoded, "ad_account_id")
@@ -39,7 +40,7 @@ defmodule AdButler.Workers.InsightsSchedulerWorkerTest do
 
       jitters = Enum.map(accounts, fn aa -> rem(:erlang.phash2(aa.meta_id), 1800) end)
 
-      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn _payload -> :ok end)
+      expect(AdButler.Messaging.PublisherMock, :publish, 3, fn _payload, _exchange -> :ok end)
 
       assert :ok = perform_job(InsightsSchedulerWorker, %{})
 
@@ -52,7 +53,7 @@ defmodule AdButler.Workers.InsightsSchedulerWorkerTest do
       insert(:ad_account, status: "PAUSED")
 
       # No messages published — 0 expects means mock must NOT be called
-      expect(AdButler.Messaging.PublisherMock, :publish, 0, fn _p -> :ok end)
+      expect(AdButler.Messaging.PublisherMock, :publish, 0, fn _p, _e -> :ok end)
 
       assert :ok = perform_job(InsightsSchedulerWorker, %{})
     end
