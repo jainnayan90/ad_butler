@@ -4,6 +4,7 @@ defmodule AdButler.Factory do
 
   alias AdButler.Accounts.{MetaConnection, User}
   alias AdButler.Ads.{Ad, AdAccount, AdSet, Campaign, Creative}
+  alias AdButler.Analytics.{AdHealthScore, Finding}
 
   def user_factory do
     %User{
@@ -86,6 +87,33 @@ defmodule AdButler.Factory do
       name: sequence(:creative_name, &"Creative #{&1}"),
       asset_specs_jsonb: %{},
       raw_jsonb: %{}
+    }
+  end
+
+  # ExMachina.Ecto generates a UUID for ad.id (autogenerate: true) even on build.
+  # All test callers MUST override ad_id/ad_account_id with IDs from inserted records
+  # to satisfy FK constraints. Never call insert(:finding) without these overrides.
+  def finding_factory do
+    ad = build(:ad)
+
+    %Finding{
+      ad_id: ad.id,
+      ad_account_id: ad.ad_account_id,
+      kind: "dead_spend",
+      severity: "high",
+      title: "Dead spend detected",
+      body: "Ad has spent with zero conversions",
+      evidence: %{"spend_cents" => 1000, "period_hours" => 48, "conversions" => 0}
+    }
+  end
+
+  # Same note as finding_factory — override ad_id with an inserted ad's ID.
+  def ad_health_score_factory do
+    %AdHealthScore{
+      ad_id: build(:ad).id,
+      computed_at: DateTime.utc_now(),
+      leak_score: Decimal.new("0.00"),
+      leak_factors: %{}
     }
   end
 end

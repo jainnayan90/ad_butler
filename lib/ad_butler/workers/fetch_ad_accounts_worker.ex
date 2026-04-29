@@ -91,7 +91,8 @@ defmodule AdButler.Workers.FetchAdAccountsWorker do
   end
 
   defp sync_account(connection, account) do
-    with {:ok, ad_account} <- Ads.upsert_ad_account(connection, build_ad_account_attrs(account)),
+    with {:ok, ad_account} <-
+           Ads.upsert_ad_account(connection.id, build_ad_account_attrs(account)),
          {:ok, payload} <- Jason.encode(%{ad_account_id: ad_account.id, sync_type: "full"}),
          :ok <- publisher().publish(payload) do
       :ok

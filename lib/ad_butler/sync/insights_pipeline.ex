@@ -110,17 +110,7 @@ defmodule AdButler.Sync.InsightsPipeline do
 
     case client.get_insights(ad_account.meta_id, connection.access_token, opts) do
       {:ok, rows} ->
-        normalised =
-          Enum.flat_map(rows, fn row ->
-            case Map.fetch(meta_id_map, row.ad_id) do
-              {:ok, local_id} ->
-                normalised_row = normalise_row(row, local_id)
-                if is_nil(normalised_row.date_start), do: [], else: [normalised_row]
-
-              :error ->
-                []
-            end
-          end)
+        normalised = filter_valid_rows(rows, meta_id_map)
 
         case Ads.bulk_upsert_insights(normalised) do
           {:ok, count} ->
@@ -151,6 +141,17 @@ defmodule AdButler.Sync.InsightsPipeline do
 
         {:error, reason}
     end
+  end
+
+  defp filter_valid_rows(rows, meta_id_map) do
+    Enum.flat_map(rows, fn row ->
+      with {:ok, local_id} <- Map.fetch(meta_id_map, row.ad_id),
+           normalised when not is_nil(normalised.date_start) <- normalise_row(row, local_id) do
+        [normalised]
+      else
+        _ -> []
+      end
+    end)
   end
 
   defp normalise_row(row, local_id) do

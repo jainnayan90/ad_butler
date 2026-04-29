@@ -103,7 +103,11 @@ config :logger, :default_formatter,
     :meta_connection_count,
     :description,
     :date_start,
-    :dropped
+    :dropped,
+    :ad_id,
+    :finding_id,
+    :ads_audited,
+    :failure_count
   ]
 
 # Use Jason for JSON parsing in Phoenix
@@ -126,7 +130,7 @@ config :phoenix, :filter_parameters, [
 # sync: 20 concurrency requires POOL_SIZE >= 25 in prod (20 workers + headroom for web/cron)
 config :ad_butler, Oban,
   repo: AdButler.Repo,
-  queues: [default: 10, sync: 20, analytics: 5],
+  queues: [default: 10, sync: 20, analytics: 5, audit: 5],
   plugins: [
     {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
@@ -138,7 +142,8 @@ config :ad_butler, Oban,
        {"*/15 * * * *", AdButler.Workers.MatViewRefreshWorker, args: %{"view" => "7d"}},
        {"0 * * * *", AdButler.Workers.MatViewRefreshWorker, args: %{"view" => "30d"}},
        {"*/30 * * * *", AdButler.Workers.InsightsSchedulerWorker},
-       {"0 */2 * * *", AdButler.Workers.InsightsConversionWorker}
+       {"0 */2 * * *", AdButler.Workers.InsightsConversionWorker},
+       {"3 */6 * * *", AdButler.Workers.AuditSchedulerWorker}
      ]}
   ]
 

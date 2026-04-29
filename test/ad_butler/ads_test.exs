@@ -84,7 +84,7 @@ defmodule AdButler.AdsTest do
         status: "ACTIVE"
       }
 
-      assert {:ok, aa} = Ads.upsert_ad_account(mc, attrs)
+      assert {:ok, aa} = Ads.upsert_ad_account(mc.id, attrs)
       assert aa.meta_id == "act_001"
     end
 
@@ -99,11 +99,31 @@ defmodule AdButler.AdsTest do
         status: "ACTIVE"
       }
 
-      {:ok, _} = Ads.upsert_ad_account(mc, attrs)
-      {:ok, updated} = Ads.upsert_ad_account(mc, %{attrs | name: "Updated"})
+      {:ok, _} = Ads.upsert_ad_account(mc.id, attrs)
+      {:ok, updated} = Ads.upsert_ad_account(mc.id, %{attrs | name: "Updated"})
 
       assert updated.name == "Updated"
       assert AdButler.Repo.aggregate(AdButler.Ads.AdAccount, :count) == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # list_ad_account_ids_for_mc_ids/1
+  # ---------------------------------------------------------------------------
+
+  describe "list_ad_account_ids_for_mc_ids/1" do
+    test "empty list returns []" do
+      assert Ads.list_ad_account_ids_for_mc_ids([]) == []
+    end
+
+    test "returns only ad_account_ids for the given mc_ids" do
+      mc_a = insert(:meta_connection)
+      mc_b = insert(:meta_connection)
+      aa_a = insert(:ad_account, meta_connection: mc_a)
+      _aa_b = insert(:ad_account, meta_connection: mc_b)
+
+      result = Ads.list_ad_account_ids_for_mc_ids([mc_a.id])
+      assert result == [aa_a.id]
     end
   end
 

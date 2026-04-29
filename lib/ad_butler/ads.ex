@@ -114,6 +114,33 @@ defmodule AdButler.Ads do
     Repo.all(from aa in AdAccount, where: aa.status == "ACTIVE")
   end
 
+  @doc "Returns all `AdAccount` records whose `meta_connection_id` is in `mc_ids`. Internal scheduler use only — no user scope."
+  @spec list_ad_accounts_by_mc_ids([binary()]) :: [AdAccount.t()]
+  def list_ad_accounts_by_mc_ids(mc_ids) when is_list(mc_ids) do
+    AdAccount
+    |> where([aa], aa.meta_connection_id in ^mc_ids)
+    |> select_list_fields(AdAccount)
+    |> Repo.all()
+  end
+
+  @doc "Returns all ad account IDs belonging to the given MetaConnection IDs."
+  @spec list_ad_account_ids_for_mc_ids([binary()]) :: [binary()]
+  def list_ad_account_ids_for_mc_ids([]), do: []
+
+  def list_ad_account_ids_for_mc_ids(mc_ids) do
+    Repo.all(from aa in AdAccount, where: aa.meta_connection_id in ^mc_ids, select: aa.id)
+  end
+
+  @doc "Returns all ad account IDs for `user` in a single SQL query via subquery."
+  @spec list_ad_account_ids_for_user(Accounts.User.t()) :: [binary()]
+  def list_ad_account_ids_for_user(%Accounts.User{} = user) do
+    mc_ids_query = Accounts.list_meta_connection_ids_query(user)
+
+    Repo.all(
+      from aa in AdAccount, where: aa.meta_connection_id in subquery(mc_ids_query), select: aa.id
+    )
+  end
+
   @doc "Streams active AdAccounts for internal scheduler use. Must be called inside a transaction."
   @spec stream_active_ad_accounts() :: Enum.t()
   def stream_active_ad_accounts do
@@ -145,11 +172,16 @@ defmodule AdButler.Ads do
     Repo.get_by(AdAccount, meta_connection_id: meta_connection_id, meta_id: meta_id)
   end
 
-  @doc "Inserts or updates an `AdAccount` for `connection`, keyed on `(meta_connection_id, meta_id)`."
-  @spec upsert_ad_account(AdButler.Accounts.MetaConnection.t(), map()) ::
-          {:ok, AdAccount.t()} | {:error, Ecto.Changeset.t()}
-  def upsert_ad_account(%AdButler.Accounts.MetaConnection{} = connection, attrs) do
-    %AdAccount{meta_connection_id: connection.id}
+  @doc """
+  Inserts or updates an `AdAccount` for `meta_connection_id`, keyed on `(meta_connection_id, meta_id)`.
+
+  **Caller MUST verify `meta_connection_id` ownership before calling.**
+  Never invoke from a controller or LiveView with a user-supplied UUID — use the scoped
+  context functions (`get_ad_account!/2`) to establish ownership first.
+  """
+  @spec upsert_ad_account(binary(), map()) :: {:ok, AdAccount.t()} | {:error, Ecto.Changeset.t()}
+  def upsert_ad_account(meta_connection_id, attrs) when is_binary(meta_connection_id) do
+    %AdAccount{meta_connection_id: meta_connection_id}
     |> AdAccount.changeset(attrs)
     |> Repo.insert(
       on_conflict:
@@ -648,6 +680,77 @@ defmodule AdButler.Ads do
       )
 
     {:ok, row}
+  end
+
+  @doc """
+  UNSAFE — no tenant scope. Returns `insights_daily` rows for ads in `ad_account_id`
+  within the past `hours` hours. Internal auditor use only.
+  """
+  @spec unsafe_list_insights_since(binary(), pos_integer()) :: [map()]
+  def unsafe_list_insights_since(ad_account_id, hours) do
+    cutoff_date = DateTime.to_date(DateTime.add(DateTime.utc_now(), -hours, :hour))
+
+    Repo.all(
+      from i in "insights_daily",
+        join: a in Ad,
+        on: i.ad_id == a.id,
+        where: a.ad_account_id == ^ad_account_id and i.date_start >= ^cutoff_date,
+        select: %{
+          ad_id: a.id,
+          ad_set_id: a.ad_set_id,
+          spend_cents: i.spend_cents,
+          impressions: i.impressions,
+          clicks: i.clicks,
+          conversions: i.conversions,
+          reach_count: i.reach_count,
+          ctr_numeric: i.ctr_numeric,
+          by_placement_jsonb: i.by_placement_jsonb
+        }
+    )
+  end
+
+  @doc "UNSAFE — no tenant scope. Returns `%{ad_id => ad_set_id}` for all ads in the account. Internal auditor use only."
+  @spec unsafe_build_ad_set_map(binary()) :: %{binary() => binary() | nil}
+  def unsafe_build_ad_set_map(ad_account_id) do
+    Repo.all(from a in Ad, where: a.ad_account_id == ^ad_account_id, select: {a.id, a.ad_set_id})
+    |> Map.new()
+  end
+
+  @doc "UNSAFE — no tenant scope. Returns ids of AdSets in LEARNING status for >7 days. Internal auditor use only."
+  @spec unsafe_list_stalled_learning_ad_set_ids(binary()) :: MapSet.t()
+  def unsafe_list_stalled_learning_ad_set_ids(ad_account_id) do
+    cutoff = DateTime.add(DateTime.utc_now(), -7 * 24, :hour)
+
+    Repo.all(
+      from s in AdSet,
+        where:
+          s.ad_account_id == ^ad_account_id and
+            fragment("?->>'effective_status' = 'LEARNING'", s.raw_jsonb) and
+            s.updated_at < ^cutoff,
+        select: s.id
+    )
+    |> MapSet.new()
+  end
+
+  @doc """
+  UNSAFE — no tenant scope. Returns `%{ad_id => %{cpa_cents: integer(), ...}}` from the
+  `ad_insights_30d` view for the given ad IDs in one query. Internal auditor use only.
+  """
+  @spec unsafe_list_30d_baselines([binary()]) :: %{binary() => map()}
+  def unsafe_list_30d_baselines(ad_ids) when is_list(ad_ids) do
+    Repo.all(
+      from v in "ad_insights_30d",
+        where: v.ad_id in ^Enum.map(ad_ids, &Ecto.UUID.dump!/1),
+        select: %{
+          ad_id: type(v.ad_id, :binary_id),
+          spend_cents: type(v.spend_cents, :integer),
+          impressions: type(v.impressions, :integer),
+          clicks: type(v.clicks, :integer),
+          conversions: type(v.conversions, :integer),
+          cpa_cents: type(v.cpa_cents, :integer)
+        }
+    )
+    |> Map.new(&{&1.ad_id, &1})
   end
 
   @doc "Inserts or updates a creative for `ad_account`, keyed on `(ad_account_id, meta_id)`."
