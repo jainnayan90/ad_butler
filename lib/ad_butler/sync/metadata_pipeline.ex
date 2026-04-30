@@ -62,6 +62,11 @@ defmodule AdButler.Sync.MetadataPipeline do
   end
 
   @impl Broadway
+  def handle_failed(messages, _context) do
+    Enum.map(messages, &maybe_requeue_once/1)
+  end
+
+  @impl Broadway
   def handle_batch(_batcher, messages, _batch_info, _context) do
     connection_ids =
       messages
@@ -234,6 +239,24 @@ defmodule AdButler.Sync.MetadataPipeline do
 
   defp partition_by_ad_account(%Message{data: %AdAccount{id: id}}), do: :erlang.phash2(id)
 
+  # Reasons that should get one in-broker retry before being dead-lettered.
+  # Anything not matched here falls through to the producer's :reject default → straight to DLQ.
+  @doc false
+  def retryable?(:rate_limit_exceeded), do: true
+  def retryable?(:meta_server_error), do: true
+  def retryable?(:timeout), do: true
+  def retryable?(_), do: false
+
+  defp maybe_requeue_once(%Message{status: {:failed, reason}} = msg) do
+    if retryable?(reason) do
+      Message.configure_ack(msg, on_failure: :reject_and_requeue_once)
+    else
+      msg
+    end
+  end
+
+  defp maybe_requeue_once(msg), do: msg
+
   defp meta_client, do: MetaClient.client()
 
   defp producer_config do
@@ -245,6 +268,7 @@ defmodule AdButler.Sync.MetadataPipeline do
         {BroadwayRabbitMQ.Producer,
          queue: @queue,
          qos: [prefetch_count: 150],
+         on_failure: :reject,
          connection: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]}
     end
   end

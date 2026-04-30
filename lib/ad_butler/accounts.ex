@@ -55,13 +55,16 @@ defmodule AdButler.Accounts do
 
       case result do
         {:ok, %{user: user, conn_record: conn_record, connection_exists: existed}} ->
-          {:ok, user, conn_record, if(existed, do: :existing, else: :new)}
+          {:ok, user, conn_record, connection_kind(existed)}
 
         {:error, _step, reason, _changes} ->
           {:error, reason}
       end
     end
   end
+
+  defp connection_kind(true), do: :existing
+  defp connection_kind(false), do: :new
 
   @doc "Returns the user with the given `id`, or `nil` if not found."
   @spec get_user(binary()) :: User.t() | nil
