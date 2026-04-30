@@ -83,4 +83,23 @@ defmodule AdButler.Sync.InsightsPipelineTest do
       assert Repo.aggregate("insights_daily", :count) == 0
     end
   end
+
+  describe "retryable?/1 (DLQ routing)" do
+    test "transient Meta failures are retryable" do
+      assert InsightsPipeline.retryable?(:rate_limit_exceeded)
+      assert InsightsPipeline.retryable?(:meta_server_error)
+      assert InsightsPipeline.retryable?(:timeout)
+    end
+
+    test "validation and auth failures go straight to DLQ" do
+      refute InsightsPipeline.retryable?(:invalid_payload)
+      refute InsightsPipeline.retryable?(:invalid_sync_type)
+      refute InsightsPipeline.retryable?(:not_found)
+      refute InsightsPipeline.retryable?(:connection_not_found)
+      refute InsightsPipeline.retryable?(:unauthorized)
+      refute InsightsPipeline.retryable?(:forbidden)
+      refute InsightsPipeline.retryable?({:bad_request, "anything"})
+      refute InsightsPipeline.retryable?(:unknown_error)
+    end
+  end
 end

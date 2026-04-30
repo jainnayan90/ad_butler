@@ -45,8 +45,6 @@ defmodule AdButler.Sync.InsightsPipeline do
 
   @impl Broadway
   def handle_message(_processor, %Message{data: data} = message, _context) do
-    Logger.debug("handle_message received", data: data)
-
     with {:ok, %{"ad_account_id" => raw_id, "sync_type" => sync_type}} <- Jason.decode(data),
          true <- sync_type in ["delivery", "conversions"],
          {:ok, ad_account_id} <- Ecto.UUID.cast(raw_id),
@@ -61,6 +59,11 @@ defmodule AdButler.Sync.InsightsPipeline do
       :error -> Message.failed(message, :invalid_payload)
       nil -> Message.failed(message, :not_found)
     end
+  end
+
+  @impl Broadway
+  def handle_failed(messages, _context) do
+    Enum.map(messages, &maybe_requeue_once/1)
   end
 
   @impl Broadway
@@ -195,6 +198,24 @@ defmodule AdButler.Sync.InsightsPipeline do
 
   defp partition_by_ad_account(%Message{data: {%AdAccount{id: id}, _}}), do: :erlang.phash2(id)
 
+  # Reasons that should get one in-broker retry before being dead-lettered.
+  # Anything not matched here falls through to the producer's :reject default → straight to DLQ.
+  @doc false
+  def retryable?(:rate_limit_exceeded), do: true
+  def retryable?(:meta_server_error), do: true
+  def retryable?(:timeout), do: true
+  def retryable?(_), do: false
+
+  defp maybe_requeue_once(%Message{status: {:failed, reason}} = msg) do
+    if retryable?(reason) do
+      Message.configure_ack(msg, on_failure: :reject_and_requeue_once)
+    else
+      msg
+    end
+  end
+
+  defp maybe_requeue_once(msg), do: msg
+
   defp meta_client do
     Application.get_env(:ad_butler, :meta_client, AdButler.Meta.Client)
   end
@@ -212,6 +233,7 @@ defmodule AdButler.Sync.InsightsPipeline do
         {BroadwayRabbitMQ.Producer,
          queue: queue,
          qos: [prefetch_count: 150],
+         on_failure: :reject,
          connection: Application.fetch_env!(:ad_butler, :rabbitmq)[:url]}
     end
   end

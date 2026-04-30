@@ -305,6 +305,24 @@ defmodule AdButler.Sync.MetadataPipelineTest do
     end
   end
 
+  describe "retryable?/1 (DLQ routing)" do
+    test "transient Meta failures are retryable" do
+      assert MetadataPipeline.retryable?(:rate_limit_exceeded)
+      assert MetadataPipeline.retryable?(:meta_server_error)
+      assert MetadataPipeline.retryable?(:timeout)
+    end
+
+    test "validation and auth failures go straight to DLQ" do
+      refute MetadataPipeline.retryable?(:invalid_payload)
+      refute MetadataPipeline.retryable?(:not_found)
+      refute MetadataPipeline.retryable?(:connection_not_found)
+      refute MetadataPipeline.retryable?(:unauthorized)
+      refute MetadataPipeline.retryable?(:forbidden)
+      refute MetadataPipeline.retryable?({:bad_request, "anything"})
+      refute MetadataPipeline.retryable?(:unknown_error)
+    end
+  end
+
   describe "parse_budget/1" do
     test "nil returns nil" do
       assert MetadataPipeline.parse_budget(nil) == nil
