@@ -32,6 +32,8 @@ defmodule AdButler.Workers.AuditSchedulerWorker do
   def perform(_job) do
     mc_ids = Accounts.list_all_active_meta_connection_ids()
     ad_accounts = Ads.list_ad_accounts_by_mc_ids(mc_ids)
+    # Read at runtime — do NOT extract to a module attribute. Compile-time freeze
+    # would defeat the FATIGUE_ENABLED env-var hot-toggle (set in config/runtime.exs).
     fatigue_enabled? = Application.get_env(:ad_butler, :fatigue_enabled, true)
 
     changesets =
@@ -58,7 +60,7 @@ defmodule AdButler.Workers.AuditSchedulerWorker do
             [job]
 
           {:error, reason} ->
-            Logger.error("audit_scheduler: unexpected insert error", reason: inspect(reason))
+            Logger.error("audit_scheduler: unexpected insert error", reason: reason)
             []
         end
       end)

@@ -1,10 +1,18 @@
 defmodule AdButler.Analytics.Finding do
   @moduledoc """
-  Schema for budget leak findings produced by `BudgetLeakAuditorWorker`.
+  Schema for findings produced by the audit workers:
+
+    * `BudgetLeakAuditorWorker` emits kinds `dead_spend`, `cpa_explosion`,
+      `bot_traffic`, `placement_drag`, `stalled_learning`.
+    * `CreativeFatiguePredictorWorker` emits the `creative_fatigue` kind.
 
   A finding represents a detected inefficiency on an ad. It is scoped to an
   `AdAccount` for fast inbox queries. Findings are deduplicated by `(ad_id, kind)`
-  while unresolved — enforced by a partial unique index and application-level check.
+  while unresolved — enforced by a partial unique index
+  (`findings_ad_id_kind_unresolved_index`) plus an application-level `MapSet`
+  pre-check in each worker. The constraint is the backstop for concurrent-worker
+  races; a violation surfaces as `{:error, changeset}` rather than a Postgres
+  exception so callers handle it as ordinary dedup.
   """
   use Ecto.Schema
   import Ecto.Changeset

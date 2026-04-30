@@ -534,6 +534,11 @@ defmodule AdButler.Ads do
   enough impressions and a snapshot would be all-null noise.
 
   Internal — called by `MetadataPipeline` after `bulk_upsert_ads/2`.
+
+  Returns `:ok` on success. The internal bulk write uses `Ecto.Adapters.SQL.query!/3`,
+  which raises on database failure — callers do not need to inspect the return for
+  errors. The unconditional `:ok` therefore reflects a "completed without raising"
+  contract, not a silenced error.
   """
   @spec append_quality_ranking_snapshots(
           [%{id: binary(), meta_id: binary()}],

@@ -266,10 +266,13 @@ defmodule AdButler.Analytics do
       )
 
     case rows do
-      rows when length(rows) < 2 ->
+      [] ->
         0.0
 
-      _ ->
+      [_] ->
+        0.0
+
+      rows ->
         ctrs = Enum.map(rows, &row_ctr/1)
         # slope per day in fraction units; multiply by 100 for percentage points
         Float.round(simple_linear_slope(ctrs) * 100.0, 4)
@@ -358,8 +361,8 @@ defmodule AdButler.Analytics do
     total_impressions = Enum.sum(Enum.map(rows, & &1.impressions))
 
     cond do
-      total_impressions == 0 -> :insufficient
-      total_spend == 0 -> :insufficient
+      total_impressions == 0 -> {:error, :insufficient}
+      total_spend == 0 -> {:error, :insufficient}
       true -> {:ok, total_spend * 1000 / total_impressions}
     end
   end
@@ -370,7 +373,7 @@ defmodule AdButler.Analytics do
     xs = Enum.to_list(0..(n - 1))
     sum_x = Enum.sum(xs)
     sum_y = Enum.sum(ys)
-    sum_xy = xs |> Enum.zip(ys) |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+    sum_xy = Enum.zip_reduce(xs, ys, 0.0, fn x, y, acc -> acc + x * y end)
     sum_xx = xs |> Enum.map(&(&1 * &1)) |> Enum.sum()
     denom = n * sum_xx - sum_x * sum_x
     if denom == 0, do: 0.0, else: (n * sum_xy - sum_x * sum_y) / denom

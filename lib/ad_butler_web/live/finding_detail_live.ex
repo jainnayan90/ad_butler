@@ -70,12 +70,12 @@ defmodule AdButlerWeb.FindingDetailLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <div :if={!@finding} class="max-w-4xl mx-auto">
+      <.back_link />
+      <p class="text-gray-500">Loading finding…</p>
+    </div>
     <div :if={@finding} class="max-w-4xl mx-auto">
-      <div class="mb-6">
-        <.link navigate={~p"/findings"} class="text-sm text-blue-600 hover:text-blue-800">
-          &larr; Back to Findings
-        </.link>
-      </div>
+      <.back_link />
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <%!-- Left column: finding detail --%>
@@ -234,5 +234,16 @@ defmodule AdButlerWeb.FindingDetailLive do
   defp format_fatigue_values(kind, _values) do
     Logger.warning("format_fatigue_values: unrecognised kind", kind: kind)
     ""
+  end
+
+  @doc false
+  def back_link(assigns) do
+    ~H"""
+    <div class="mb-6">
+      <.link navigate={~p"/findings"} class="text-sm text-blue-600 hover:text-blue-800">
+        &larr; Back to Findings
+      </.link>
+    </div>
+    """
   end
 end

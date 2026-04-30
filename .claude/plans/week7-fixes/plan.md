@@ -13,66 +13,46 @@ Land all 14 fixes from the Week 7 review with no regressions. Approaches are pre
 
 ### Phase 1 — Context layer (Ads + Analytics + Schema doc)
 
-- [ ] [P1-T1][ecto] **B1** Replace N+1 loop in [`Ads.append_quality_ranking_snapshots/2`](../../../lib/ad_butler/ads.ex) ([lib/ad_butler/ads.ex:550-561](../../../lib/ad_butler/ads.ex#L550)) with a single bulk write. Keep the existing `load_existing_history/1` bulk read; build a list of `%{id, quality_ranking_history, inserted_at, updated_at}` entries in app code; one `Repo.insert_all(Ad, entries, on_conflict: {:replace, [:quality_ranking_history, :updated_at]}, conflict_target: [:id])`. Verify with new test seeding 30 ads + asserting one query in the upsert path.
+- [x] [P1-T1][ecto] **B1** Replaced N+1 loop with a single `UPDATE ads ... FROM unnest($1::uuid[], $2::text[]::jsonb[])` statement at [ads.ex:566-597](../../../lib/ad_butler/ads.ex#L566-L597) — different shape than the planned `insert_all on_conflict` (avoids encode-twice issue with already-encoded JSONB) but achieves the same single-round-trip goal. New tests in [ads_test.exs:363-471](../../../test/ad_butler/ads_test.exs#L363) cover happy path + 14-snapshot cap + nil-only filter.
 
-- [ ] [P1-T2][ecto] **W4** Drop redundant boolean guard in [`Analytics.get_cpm_change_pct/2`](../../../lib/ad_butler/analytics.ex#L348) — remove `with true <- prior_cpm > 0`. `avg_cpm/1` already returns `:insufficient` for zero spend; the guard is dead code that violates Iron Law #8.
+- [x] [P1-T2][ecto] **W4** Boolean guard removed; [`Analytics.get_cpm_change_pct/1`](../../../lib/ad_butler/analytics.ex#L320) now relies on the upstream `:insufficient` return.
 
-- [ ] [P1-T3][ecto] **S11** Drop unused `_window_days` parameter from `Analytics.get_cpm_change_pct/2`. Make it 1-arity. Update the single call site in `creative_fatigue_predictor_worker.ex` (`heuristic_cpm_saturation/1`).
+- [x] [P1-T3][ecto] **S11** `get_cpm_change_pct/1` is 1-arity; `_window_days` parameter dropped; single call site in `heuristic_cpm_saturation/1` updated.
 
-- [ ] [P1-T4] **W7** Rewrite `@moduledoc` on [`AdButler.Analytics.AdHealthScore`](../../../lib/ad_butler/analytics/ad_health_score.ex#L3) to mention both writers (BudgetLeakAuditor + CreativeFatiguePredictor) and the column-isolation strategy on conflict.
+- [x] [P1-T4] **W7** [`AdHealthScore`](../../../lib/ad_butler/analytics/ad_health_score.ex#L1-L18) `@moduledoc` rewritten — names both writers, the shared 6-hour bucket, and the column-isolated `on_conflict` replace strategy.
 
 ### Phase 2 — Worker correctness rebuild
 
 The blocker fixes B2/B3 + warning W5 + suggestion S10 all touch the same `audit_account` reduce loop. Treat as one cohesive restructure.
 
-- [ ] [P2-T1][oban] **B3** Pattern-match in heads for [`detect_quality_drop/1`](../../../lib/ad_butler/workers/creative_fatigue_predictor_worker.ex#L134). Replace `when length(snapshots) < 2` with `defp detect_quality_drop([])` + `defp detect_quality_drop([_])` + generic.
+- [x] [P2-T1][oban] **B3** Pattern-matched in heads at [creative_fatigue_predictor_worker.ex:135-138](../../../lib/ad_butler/workers/creative_fatigue_predictor_worker.ex#L135) — `defp detect_quality_drop([])` + `defp detect_quality_drop([_])` + generic clause.
 
-- [ ] [P2-T2][oban] **B2 + W5 + S10** Restructure `audit_account/1` ([creative_fatigue_predictor_worker.ex:211-250](../../../lib/ad_butler/workers/creative_fatigue_predictor_worker.ex#L211)):
-  - Always emit a fatigue-score `entry` for every audited ad — including those where `maybe_emit_finding` returns `:skipped` (dedup). Score upsert is idempotent so retries are safe.
-  - Switch `Enum.reduce` → `Enum.reduce_while` (or `with` chain) so a `{:error, reason}` from `maybe_emit_finding` halts and propagates up through `audit_account/1` → Oban retries.
-  - Drop the `_emit_count` accumulator; entry list is the only state needed.
-  - Mirror BudgetLeakAuditor's `apply_check/5` halt-on-error pattern.
+- [x] [P2-T2][oban] **B2 + W5 + S10** Restructured into `build_entries/4` + `audit_one_ad/4` at [creative_fatigue_predictor_worker.ex:247-274](../../../lib/ad_butler/workers/creative_fatigue_predictor_worker.ex#L247) — `Enum.reduce_while` halts on `{:error, _}`, score entries always emitted on `:skipped` dedup, no emit-count accumulator. Mirrors BudgetLeakAuditor's halt-on-error pattern.
 
-- [ ] [P2-T3][oban] **S13** Extract `six_hour_bucket/0` from both auditor workers into `AdButler.Workers.AuditHelpers` (`@moduledoc false`). Replace inline copies in `creative_fatigue_predictor_worker.ex` and `budget_leak_auditor_worker.ex`.
+- [x] [P2-T3][oban] **S13** [`AuditHelpers`](../../../lib/ad_butler/workers/audit_helpers.ex) module created (`@moduledoc false`); both [budget_leak_auditor_worker.ex:23,84,383](../../../lib/ad_butler/workers/budget_leak_auditor_worker.ex#L23) and `creative_fatigue_predictor_worker.ex` now alias and delegate. Bonus: also moved `dedup_constraint_error?/1` since both workers had identical copies.
 
 ### Phase 3 — Configuration + LiveView + docs polish
 
-- [ ] [P3-T1] **W6** Move fatigue kill-switch to [`config/runtime.exs`](../../../config/runtime.exs):
-  ```elixir
-  config :ad_butler, fatigue_enabled: System.get_env("FATIGUE_ENABLED", "true") == "true"
-  ```
-  Add `FATIGUE_ENABLED` to `.env.example` with comment "true|false (default true) — disable creative-fatigue audits without redeploy". Update `AuditSchedulerWorker` moduledoc to confirm hot-toggle path.
+- [x] [P3-T1] **W6** [config/runtime.exs:90](../../../config/runtime.exs#L90) reads `FATIGUE_ENABLED` (default `"true"`); [.env.example:59](../../../.env.example#L59) documents the toggle; [AuditSchedulerWorker](../../../lib/ad_butler/workers/audit_scheduler_worker.ex#L11-L15) `@moduledoc` explains the hot-toggle path including the test-side `Application.put_env/3` route.
 
-- [ ] [P3-T2][liveview] **S12** Replace `inspect/1` fallback in [`finding_detail_live.ex:233`](../../../lib/ad_butler_web/live/finding_detail_live.ex#L233):
-  ```elixir
-  defp format_fatigue_values(kind, _values) do
-    Logger.warning("format_fatigue_values: unrecognised kind", kind: kind)
-    ""
-  end
-  ```
-  Add `:kind` to the Logger metadata allowlist in `config/config.exs` if not already present.
+- [x] [P3-T2][liveview] **S12** [finding_detail_live.ex:234-237](../../../lib/ad_butler_web/live/finding_detail_live.ex#L234) fallback uses `Logger.warning` with `:kind` metadata; `:kind` already in the allowlist at [config/config.exs:89](../../../config/config.exs#L89).
 
-- [ ] [P3-T3] **S14** Update stale POOL_SIZE comment in [`config/config.exs:138`](../../../config/config.exs#L138). New worker totals: 10 + 20 + 5 + 5 + 5 + 5 = 50. Recommend `>= 60` in `.env.example`. Adjust the comment to "fatigue_audit + audit + sync run concurrently — set POOL_SIZE >= 60 in prod".
+- [x] [P3-T3] **S14** Pool-size comment updated at [config/config.exs:156-158](../../../config/config.exs#L156) — totals (10+20+5+5+5+5=50) and "POOL_SIZE >= 60 in prod" recommendation are in place.
 
 ### Phase 4 — Test cleanup
 
-- [ ] [P4-T1] **W8** Create `test/support/insights_helpers.ex` exporting `insert_daily/3` (canonical version). Accept all attrs (spend_cents, impressions, clicks, frequency, reach_count, cpm_cents, ctr_numeric, by_placement_jsonb). Both `analytics_test.exs` and `creative_fatigue_predictor_worker_test.exs` import it; remove the duplicate `defp insert_daily` from both files.
+- [x] [P4-T1] **W8** [test/support/insights_helpers.ex](../../../test/support/insights_helpers.ex) exists with canonical `insert_daily/3`; both [analytics_test.exs:5](../../../test/ad_butler/analytics_test.exs#L5) and [creative_fatigue_predictor_worker_test.exs:8](../../../test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs#L8) import it; duplicate `defp insert_daily` clauses removed.
 
-- [ ] [P4-T2] **W9** Rewrite tenant-isolation test in `creative_fatigue_predictor_worker_test.exs:463-498`:
-  - Account A has ads with insights but NO triggering signals (frequency 1.0, stable CTR, equal CPM).
-  - Account B has separate ads with all 3 heuristic-firing signals.
-  - Run `perform_job(CreativeFatiguePredictorWorker, %{"ad_account_id" => account_a.id})`.
-  - Assert: zero findings under account B; zero AdHealthScore rows for account B's ads.
-  - Old test (account B has NO ads) is removed — it passed by absence.
+- [x] [P4-T2] **W9** Tenant-isolation test rewritten at [creative_fatigue_predictor_worker_test.exs:444-535](../../../test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs#L444) — Account A has clean signals, Account B has all 3 firing signals, perform_job runs against A only, asserts zero scores + findings for Account B's ad (proves scope filter works, not absence-of-data).
 
-- [ ] [P4-T3] Verify integration tests in worker test still pass after P2-T2's reduce_while refactor (existing tests should not need updates if structure is preserved).
+- [x] [P4-T3] Existing worker integration tests still pass post-restructure — full suite green (399/399).
 
 ### Phase 5 — Verification gate
 
-- [ ] [P5-T1] Format + compile: `mix format && mix compile --warnings-as-errors`
-- [ ] [P5-T2] Full test: `mix test` — all 392 tests pass + any new ones added in P1-T1 / P4-T2.
-- [ ] [P5-T3] Credo: `mix credo --strict` — no NEW issues introduced (the 1 pre-existing warning + 1 pre-existing nesting issue in `accounts.ex` and `insights_pipeline.ex` are out of scope).
-- [ ] [P5-T4] Iron-law: `mix check.unsafe_callers` — must pass.
+- [x] [P5-T1] Format + compile clean — `mix format --check-formatted` + `mix compile --warnings-as-errors` both no-output.
+- [x] [P5-T2] `mix test` → **399 tests, 0 failures, 8 excluded** (up from 392 baseline; new tests for ads bulk write + tenant isolation rewrite included).
+- [x] [P5-T3] `mix credo --strict` → **797 mods/funs, found no issues** — even the 2 pre-existing items the plan flagged as out-of-scope are now clean.
+- [x] [P5-T4] `mix check.unsafe_callers` → no output (passes).
 
 ---
 
@@ -99,12 +79,12 @@ The blocker fixes B2/B3 + warning W5 + suggestion S10 all touch the same `audit_
 
 ## Acceptance Criteria
 
-- [ ] All 14 triage items checked off.
-- [ ] `mix test` passes (≥ 392 tests).
-- [ ] `mix credo --strict` introduces no new issues.
-- [ ] `mix check.unsafe_callers` passes.
-- [ ] N+1 verified eliminated in P1-T1 (single SQL statement for the upsert path).
-- [ ] Retry safety verified: kill the process between finding-emit and score-write in a manual `iex` run; on retry, scores are still written.
+- [x] All 14 triage items checked off.
+- [x] `mix test` passes — 399 / 399.
+- [x] `mix credo --strict` — zero issues.
+- [x] `mix check.unsafe_callers` passes.
+- [x] N+1 eliminated — `bulk_write_quality_ranking_history/2` issues a single `UPDATE ... FROM unnest()` ([ads.ex:588-596](../../../lib/ad_butler/ads.ex#L588)).
+- [ ] Retry safety verified manually — deferred (no `iex` smoke run done in this session; the structural change to `reduce_while` + always-emit-score is covered by unit tests but the kill-mid-run scenario is unverified).
 
 ---
 
