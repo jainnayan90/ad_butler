@@ -192,6 +192,30 @@ defmodule AdButler.Analytics do
   end
 
   @doc """
+  Bulk-upserts fatigue scores. Mirrors `bulk_insert_health_scores/1` but only
+  touches the fatigue columns on conflict so a parallel `BudgetLeakAuditorWorker`
+  write at the same `computed_at` bucket is preserved.
+  """
+  @spec bulk_insert_fatigue_scores([map()]) :: :ok
+  def bulk_insert_fatigue_scores([]), do: :ok
+
+  def bulk_insert_fatigue_scores(entries) do
+    {count, _} =
+      Repo.insert_all(
+        AdHealthScore,
+        entries,
+        on_conflict: {:replace, [:fatigue_score, :fatigue_factors, :inserted_at]},
+        conflict_target: [:ad_id, :computed_at]
+      )
+
+    if count == 0 do
+      Logger.warning("bulk_insert_fatigue_scores: 0 rows written", count: length(entries))
+    end
+
+    :ok
+  end
+
+  @doc """
   Returns the most recent `AdHealthScore` for `ad_id`, or `nil` if none exists.
 
   **UNSAFE — no tenant scope.** Callers MUST verify that the requesting user owns
@@ -207,6 +231,149 @@ defmodule AdButler.Analytics do
         order_by: [desc: s.computed_at],
         limit: 1
     )
+  end
+
+  # ---------------------------------------------------------------------------
+  # Creative fatigue helpers — internal (no scope, called by predictor worker)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Fits a simple linear regression on daily CTR for `ad_id` over the last
+  `window_days` days and returns the slope in **percentage-points per day**.
+
+  CTR per day is computed from `clicks / impressions` directly (rather than the
+  stored `ctr_numeric`) so days with zero impressions contribute a 0.0 datapoint
+  and don't break the fit. Returns `0.0` when fewer than 2 days of data exist —
+  the predictor heuristic guards on a minimum-day threshold separately.
+
+  Reads `insights_daily` directly. The 7-day matview omits per-day granularity,
+  so a per-row query is required for slope.
+  """
+  @spec compute_ctr_slope(binary(), pos_integer()) :: float()
+  def compute_ctr_slope(ad_id, window_days) when window_days >= 2 do
+    cutoff = Date.add(Date.utc_today(), -(window_days - 1))
+
+    rows =
+      Repo.all(
+        from i in "insights_daily",
+          where: i.ad_id == type(^ad_id, :binary_id) and i.date_start >= ^cutoff,
+          order_by: [asc: i.date_start],
+          select: %{
+            date_start: i.date_start,
+            impressions: i.impressions,
+            clicks: i.clicks
+          }
+      )
+
+    case rows do
+      rows when length(rows) < 2 ->
+        0.0
+
+      _ ->
+        ctrs = Enum.map(rows, &row_ctr/1)
+        # slope per day in fraction units; multiply by 100 for percentage points
+        Float.round(simple_linear_slope(ctrs) * 100.0, 4)
+    end
+  end
+
+  defp row_ctr(%{impressions: i, clicks: c}) when i > 0, do: c / i
+  defp row_ctr(_), do: 0.0
+
+  @doc """
+  Returns the average daily frequency for `ad_id` over the last 7 days, or `nil`
+  if no qualifying rows exist (frequency NULL or 0 means Meta hadn't computed it).
+
+  Reads `insights_daily` directly — `ad_insights_7d` aggregates impressions/clicks
+  but not frequency. Returns a float for downstream comparison.
+  """
+  @spec get_7d_frequency(binary()) :: float() | nil
+  def get_7d_frequency(ad_id) do
+    cutoff = Date.add(Date.utc_today(), -6)
+
+    avg =
+      Repo.one(
+        from i in "insights_daily",
+          where:
+            i.ad_id == type(^ad_id, :binary_id) and i.date_start >= ^cutoff and
+              not is_nil(i.frequency) and i.frequency > 0,
+          select: avg(i.frequency)
+      )
+
+    case avg do
+      nil -> nil
+      %Decimal{} = d -> d |> Decimal.to_float() |> Float.round(4)
+    end
+  end
+
+  @doc """
+  Returns the percent change in CPM between the most recent 7 days and the
+  prior 7-day window (days 8–14 ago) for `ad_id`, or `nil` when either window
+  has zero spend or zero impressions.
+
+  Each window's CPM is `SUM(spend_cents) * 1000 / SUM(impressions)`. Reads
+  `insights_daily` directly — the 7d matview only captures the most recent
+  window so we can't get the prior week from it.
+
+  Positive return values indicate CPM rose; negative values indicate it fell.
+  """
+  @spec get_cpm_change_pct(binary()) :: float() | nil
+  def get_cpm_change_pct(ad_id) do
+    today = Date.utc_today()
+    recent_cutoff = Date.add(today, -6)
+    prior_start = Date.add(today, -13)
+    prior_end = Date.add(today, -7)
+
+    rows =
+      Repo.all(
+        from i in "insights_daily",
+          where:
+            i.ad_id == type(^ad_id, :binary_id) and i.date_start >= ^prior_start and
+              i.date_start <= ^today,
+          select: %{
+            date_start: i.date_start,
+            spend_cents: i.spend_cents,
+            impressions: i.impressions
+          }
+      )
+
+    {recent, prior} =
+      Enum.split_with(rows, fn r -> Date.compare(r.date_start, recent_cutoff) != :lt end)
+
+    prior =
+      Enum.filter(prior, fn r ->
+        Date.compare(r.date_start, prior_start) != :lt and
+          Date.compare(r.date_start, prior_end) != :gt
+      end)
+
+    with {:ok, recent_cpm} <- avg_cpm(recent),
+         {:ok, prior_cpm} <- avg_cpm(prior) do
+      Float.round((recent_cpm - prior_cpm) / prior_cpm * 100.0, 2)
+    else
+      _ -> nil
+    end
+  end
+
+  defp avg_cpm(rows) do
+    total_spend = Enum.sum(Enum.map(rows, & &1.spend_cents))
+    total_impressions = Enum.sum(Enum.map(rows, & &1.impressions))
+
+    cond do
+      total_impressions == 0 -> :insufficient
+      total_spend == 0 -> :insufficient
+      true -> {:ok, total_spend * 1000 / total_impressions}
+    end
+  end
+
+  # Closed-form OLS slope. xs are 0..n-1 (regular daily samples).
+  defp simple_linear_slope(ys) do
+    n = length(ys)
+    xs = Enum.to_list(0..(n - 1))
+    sum_x = Enum.sum(xs)
+    sum_y = Enum.sum(ys)
+    sum_xy = xs |> Enum.zip(ys) |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+    sum_xx = xs |> Enum.map(&(&1 * &1)) |> Enum.sum()
+    denom = n * sum_xx - sum_x * sum_x
+    if denom == 0, do: 0.0, else: (n * sum_xy - sum_x * sum_y) / denom
   end
 
   # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ defmodule AdButlerWeb.FindingsLive do
 
   @per_page 50
   @valid_severities ~w(low medium high)
-  @valid_kinds ~w(dead_spend cpa_explosion bot_traffic placement_drag stalled_learning)
+  @valid_kinds ~w(dead_spend cpa_explosion bot_traffic placement_drag stalled_learning creative_fatigue)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -137,6 +137,9 @@ defmodule AdButlerWeb.FindingsLive do
             </option>
             <option value="stalled_learning" selected={@filter_kind == "stalled_learning"}>
               Stalled Learning
+            </option>
+            <option value="creative_fatigue" selected={@filter_kind == "creative_fatigue"}>
+              Creative Fatigue
             </option>
           </select>
         </div>

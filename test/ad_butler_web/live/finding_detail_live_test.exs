@@ -96,6 +96,43 @@ defmodule AdButlerWeb.FindingDetailLiveTest do
       assert html =~ "No health score computed yet"
     end
 
+    test "renders fatigue score and per-signal values when present", %{
+      conn: conn,
+      user: user,
+      ad: ad,
+      finding: dead_spend_finding
+    } do
+      insert(:ad_health_score,
+        ad_id: ad.id,
+        leak_score: nil,
+        fatigue_score: Decimal.new("65.00"),
+        fatigue_factors: %{
+          "frequency_ctr_decay" => %{
+            "weight" => 35,
+            "values" => %{"frequency" => 4.5, "ctr_slope" => -1.2}
+          },
+          "quality_drop" => %{
+            "weight" => 30,
+            "values" => %{
+              "from" => "above_average",
+              "to" => "average",
+              "from_date" => "2026-04-25"
+            }
+          }
+        }
+      )
+
+      conn = log_in_user(conn, user)
+      {:ok, _view, html} = live(conn, ~p"/findings/#{dead_spend_finding.id}")
+
+      assert html =~ "Fatigue Score"
+      assert html =~ "65"
+      assert html =~ "Frequency + CTR decay"
+      assert html =~ "frequency 4.5"
+      assert html =~ "Quality ranking drop"
+      assert html =~ "above_average → average"
+    end
+
     test "user B cannot acknowledge user A's finding via context", %{finding: finding} do
       user_b = insert(:user)
       _mc_b = insert(:meta_connection, user: user_b)

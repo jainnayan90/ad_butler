@@ -9,6 +9,8 @@ defmodule AdButlerWeb.FindingDetailLive do
 
   use AdButlerWeb, :live_view
 
+  require Logger
+
   import AdButlerWeb.FindingHelpers
 
   alias AdButler.Analytics
@@ -126,12 +128,12 @@ defmodule AdButlerWeb.FindingDetailLive do
           <h3 class="text-lg font-semibold text-gray-900 mb-4">Health Score</h3>
 
           <div :if={@health_score} class="space-y-4">
-            <div>
+            <div :if={@health_score.leak_score}>
               <p class="text-sm text-gray-500 mb-1">Leak Score</p>
               <div class="flex items-center gap-3">
                 <div class="flex-1 bg-gray-200 rounded-full h-2.5">
                   <div
-                    class={leak_score_bar_class(@health_score.leak_score)}
+                    class={score_bar_class(@health_score.leak_score)}
                     style={"width: #{min(Decimal.to_float(@health_score.leak_score), 100)}%"}
                   >
                   </div>
@@ -143,7 +145,7 @@ defmodule AdButlerWeb.FindingDetailLive do
             </div>
 
             <div :if={map_size(@health_score.leak_factors || %{}) > 0}>
-              <p class="text-sm text-gray-500 mb-2">Contributing Factors</p>
+              <p class="text-sm text-gray-500 mb-2">Leak Factors</p>
               <ul class="space-y-1">
                 <li
                   :for={{factor, weight} <- @health_score.leak_factors}
@@ -151,6 +153,37 @@ defmodule AdButlerWeb.FindingDetailLive do
                 >
                   <span class="text-gray-700">{kind_label(factor)}</span>
                   <span class="font-medium text-gray-900">+{weight}</span>
+                </li>
+              </ul>
+            </div>
+
+            <div :if={@health_score.fatigue_score}>
+              <p class="text-sm text-gray-500 mb-1">Fatigue Score</p>
+              <div class="flex items-center gap-3">
+                <div class="flex-1 bg-gray-200 rounded-full h-2.5">
+                  <div
+                    class={score_bar_class(@health_score.fatigue_score)}
+                    style={"width: #{min(Decimal.to_float(@health_score.fatigue_score), 100)}%"}
+                  >
+                  </div>
+                </div>
+                <span class="text-sm font-semibold text-gray-700">
+                  {Decimal.round(@health_score.fatigue_score, 0)}/100
+                </span>
+              </div>
+            </div>
+
+            <div :if={map_size(@health_score.fatigue_factors || %{}) > 0}>
+              <p class="text-sm text-gray-500 mb-2">Fatigue Signals</p>
+              <ul class="space-y-2">
+                <li :for={{factor, payload} <- @health_score.fatigue_factors} class="text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-gray-700">{kind_label(factor)}</span>
+                    <span class="font-medium text-gray-900">+{factor_weight(payload)}</span>
+                  </div>
+                  <div :if={factor_values(payload) != %{}} class="mt-1 ml-2 text-xs text-gray-500">
+                    {format_fatigue_values(factor, factor_values(payload))}
+                  </div>
                 </li>
               </ul>
             </div>
@@ -169,7 +202,7 @@ defmodule AdButlerWeb.FindingDetailLive do
     """
   end
 
-  defp leak_score_bar_class(score) do
+  defp score_bar_class(score) do
     score_float = Decimal.to_float(score)
     base = "h-2.5 rounded-full "
 
@@ -178,5 +211,28 @@ defmodule AdButlerWeb.FindingDetailLive do
       score_float >= 30 -> base <> "bg-yellow-500"
       true -> base <> "bg-green-500"
     end
+  end
+
+  defp factor_weight(%{"weight" => w}) when is_integer(w), do: w
+  defp factor_weight(_), do: 0
+
+  defp factor_values(%{"values" => v}) when is_map(v), do: v
+  defp factor_values(_), do: %{}
+
+  defp format_fatigue_values("frequency_ctr_decay", %{"frequency" => f, "ctr_slope" => s}) do
+    "frequency #{Float.round(f, 2)}, CTR slope #{Float.round(s, 2)} pp/day"
+  end
+
+  defp format_fatigue_values("quality_drop", %{"from" => from, "to" => to, "from_date" => date}) do
+    "#{from} → #{to} (since #{date})"
+  end
+
+  defp format_fatigue_values("cpm_saturation", %{"cpm_change_pct" => pct}) do
+    "CPM #{(pct >= 0 && "+") || ""}#{Float.round(pct, 1)}%"
+  end
+
+  defp format_fatigue_values(kind, _values) do
+    Logger.warning("format_fatigue_values: unrecognised kind", kind: kind)
+    ""
   end
 end

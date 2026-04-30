@@ -97,6 +97,30 @@ defmodule AdButlerWeb.FindingsLiveTest do
     test "unauthenticated request redirects to /", %{conn: conn} do
       assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/findings")
     end
+
+    test "filter by kind=creative_fatigue shows only fatigue findings", %{
+      conn: conn,
+      user: user,
+      ad_account: ad_account
+    } do
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      fatigue_finding =
+        insert(:finding,
+          ad_id: ad.id,
+          ad_account_id: ad_account.id,
+          kind: "creative_fatigue",
+          severity: "medium",
+          title: "Ad showing fatigue signals"
+        )
+
+      conn = log_in_user(conn, user)
+      {:ok, _view, html} = live(conn, ~p"/findings?#{%{kind: "creative_fatigue"}}")
+
+      assert html =~ fatigue_finding.title
+      assert html =~ "Creative Fatigue"
+    end
   end
 
   describe "filter_changed event" do

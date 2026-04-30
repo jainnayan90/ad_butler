@@ -14,6 +14,7 @@ defmodule AdButler.Ads do
   alias AdButler.Accounts.User
   alias AdButler.Ads.{Ad, AdAccount, AdSet, Campaign, Creative, Insight}
   alias AdButler.Repo
+  alias Ecto.Adapters.SQL
 
   # ---------------------------------------------------------------------------
   # Security boundary: all user-facing queries pass through scope/2
@@ -164,6 +165,19 @@ defmodule AdButler.Ads do
     |> select([a], {a.meta_id, a.id})
     |> Repo.all()
     |> Map.new()
+  end
+
+  @doc """
+  UNSAFE — returns all `Ad.id` values for `ad_account_id` without tenant scope.
+  Callers must verify ownership of `ad_account_id` before calling. Internal
+  audit-worker use only.
+  """
+  @spec unsafe_list_ad_ids_for_account(binary()) :: [binary()]
+  def unsafe_list_ad_ids_for_account(ad_account_id) do
+    Ad
+    |> where([a], a.ad_account_id == ^ad_account_id)
+    |> select([a], a.id)
+    |> Repo.all()
   end
 
   @doc "Returns the `AdAccount` matching `(meta_connection_id, meta_id)`, or `nil`."
@@ -504,6 +518,122 @@ defmodule AdButler.Ads do
       conflict_target: [:ad_account_id, :meta_id],
       returning: [:id, :meta_id]
     )
+  end
+
+  @history_cap 14
+
+  @doc """
+  Appends today's `quality_ranking` snapshot to each upserted ad's
+  `quality_ranking_history` JSONB column, capping the array at #{@history_cap} entries.
+
+  `upserted` is the second element of `bulk_upsert_ads/2` (`[%{id, meta_id}]`).
+  `raw_ads` is the original Meta API response list keyed by `"id"` — used to
+  pull `quality_ranking`, `engagement_rate_ranking`, `conversion_rate_ranking`.
+
+  Skips entries whose all three ranking fields are nil — Meta hasn't accrued
+  enough impressions and a snapshot would be all-null noise.
+
+  Internal — called by `MetadataPipeline` after `bulk_upsert_ads/2`.
+  """
+  @spec append_quality_ranking_snapshots(
+          [%{id: binary(), meta_id: binary()}],
+          [map()]
+        ) :: :ok
+  def append_quality_ranking_snapshots([], _raw_ads), do: :ok
+
+  def append_quality_ranking_snapshots(upserted, raw_ads) do
+    raw_by_meta_id = Map.new(raw_ads, &{&1["id"], &1})
+    today = Date.to_iso8601(Date.utc_today())
+
+    snapshot_pairs =
+      Enum.flat_map(upserted, fn %{id: id, meta_id: meta_id} ->
+        case Map.get(raw_by_meta_id, meta_id) do
+          nil -> []
+          raw -> build_snapshot(id, raw, today)
+        end
+      end)
+
+    case snapshot_pairs do
+      [] ->
+        :ok
+
+      pairs ->
+        ad_ids = Enum.map(pairs, &elem(&1, 0))
+        existing = load_existing_history(ad_ids)
+        bulk_write_quality_ranking_history(pairs, existing)
+        :ok
+    end
+  end
+
+  # Single-round-trip bulk UPDATE via `unnest()`. Builds two parallel arrays
+  # (ad_id UUIDs, history JSONB documents) and joins them in Postgres so every
+  # ad's history is rewritten in one statement.
+  defp bulk_write_quality_ranking_history(pairs, existing) do
+    {id_bins, history_texts} =
+      Enum.reduce(pairs, {[], []}, fn {ad_id, snapshot}, {ids, texts} ->
+        history = Map.get(existing, ad_id) || %{"snapshots" => []}
+
+        new_snapshots =
+          history
+          |> Map.get("snapshots", [])
+          |> Kernel.++([snapshot])
+          |> Enum.take(-@history_cap)
+
+        {[Ecto.UUID.dump!(ad_id) | ids], [Jason.encode!(%{"snapshots" => new_snapshots}) | texts]}
+      end)
+
+    # Pass pre-encoded JSON as `text[]` and cast to `jsonb[]` inside the
+    # statement. Going via `text` avoids Postgrex's jsonb encoder re-encoding
+    # an already-encoded string as a JSONB scalar.
+    sql = """
+    UPDATE ads SET
+      quality_ranking_history = data.history,
+      updated_at = NOW()
+    FROM unnest($1::uuid[], $2::text[]::jsonb[]) AS data(id, history)
+    WHERE ads.id = data.id
+    """
+
+    SQL.query!(Repo, sql, [id_bins, history_texts])
+  end
+
+  defp build_snapshot(ad_id, raw, today) do
+    qr = raw["quality_ranking"]
+    er = raw["engagement_rate_ranking"]
+    cr = raw["conversion_rate_ranking"]
+
+    if qr == nil and er == nil and cr == nil do
+      []
+    else
+      [
+        {ad_id,
+         %{
+           "date" => today,
+           "quality_ranking" => qr,
+           "engagement_rate_ranking" => er,
+           "conversion_rate_ranking" => cr
+         }}
+      ]
+    end
+  end
+
+  defp load_existing_history(ad_ids) do
+    from(a in Ad, where: a.id in ^ad_ids, select: {a.id, a.quality_ranking_history})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
+  UNSAFE — no tenant scope. Returns the snapshot list from `quality_ranking_history`
+  for the given `ad_id`, oldest first. Empty list when no history exists or the ad
+  is missing. Internal predictor-worker use only.
+  """
+  @spec unsafe_get_quality_ranking_history(binary()) :: [map()]
+  def unsafe_get_quality_ranking_history(ad_id) do
+    case Repo.one(from a in Ad, where: a.id == ^ad_id, select: a.quality_ranking_history) do
+      nil -> []
+      %{"snapshots" => snapshots} when is_list(snapshots) -> snapshots
+      _ -> []
+    end
   end
 
   defp do_bulk_upsert(schema, ad_account_id, attrs_list, insert_opts) do
