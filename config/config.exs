@@ -13,6 +13,24 @@ config :ad_butler,
   trusted_proxy: false,
   env: config_env()
 
+# Per D0003 (claude default) and D0006 (jido/jido_ai/req_llm pins). Swap a model is a
+# config edit, never a code change. Provider:model strings are the ReqLLM model spec.
+config :ad_butler, :llm_models,
+  chat_default: "anthropic:claude-sonnet-4-6",
+  chat_cheap: "anthropic:claude-haiku-4-5",
+  embedding: "openai:text-embedding-3-small"
+
+# Force HTTP/1 pool — Finch HTTP/2 silently fails on bodies > 64KB
+# (https://github.com/sneako/finch/issues/265). ReqLLM also defaults this way; we set
+# it explicitly so a future bump doesn't quietly switch protocols on us.
+config :req_llm,
+  finch: [
+    name: ReqLLM.Finch,
+    pools: %{
+      default: [protocols: [:http1], size: 1, count: 8]
+    }
+  ]
+
 # Configure the endpoint
 # Session salts (session_signing_salt, session_encryption_salt) are baked into the release
 # image for prod (compile_env! for the LiveView socket, fetch_env! for the HTTP session plug).
@@ -111,7 +129,8 @@ config :logger, :default_formatter,
     :chunk_size,
     :period,
     :inserted,
-    :expected
+    :expected,
+    :ads_with_signals
   ]
 
 # Use Jason for JSON parsing in Phoenix
@@ -134,10 +153,19 @@ config :phoenix, :filter_parameters, [
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
-# sync: 20 concurrency requires POOL_SIZE >= 25 in prod (20 workers + headroom for web/cron)
+# Total worker concurrency = default(10) + sync(20) + analytics(5) + audit(5) +
+# fatigue_audit(5) + notifications(5) = 50. fatigue_audit + audit + sync run
+# concurrently — set POOL_SIZE >= 60 in prod for headroom over web + cron + LiveView.
 config :ad_butler, Oban,
   repo: AdButler.Repo,
-  queues: [default: 10, sync: 20, analytics: 5, audit: 5, notifications: 5],
+  queues: [
+    default: 10,
+    sync: 20,
+    analytics: 5,
+    audit: 5,
+    fatigue_audit: 5,
+    notifications: 5
+  ],
   plugins: [
     {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},

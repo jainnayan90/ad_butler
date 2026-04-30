@@ -2,6 +2,7 @@ defmodule AdButler.AdsTest do
   use AdButler.DataCase, async: true
 
   import AdButler.Factory
+  import Ecto.Query
 
   alias AdButler.Accounts
   alias AdButler.Ads
@@ -352,6 +353,123 @@ defmodule AdButler.AdsTest do
       assert AdButler.Repo.aggregate(AdButler.Ads.Ad, :count) == 1
       reloaded = AdButler.Repo.get!(AdButler.Ads.Ad, id)
       assert reloaded.name == "Updated"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # append_quality_ranking_snapshots/2
+  # ---------------------------------------------------------------------------
+
+  describe "append_quality_ranking_snapshots/2" do
+    test "appends a snapshot for every upserted ad" do
+      aa = insert(:ad_account)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
+
+      attrs =
+        Enum.map(1..30, fn n ->
+          %{
+            meta_id: "ad_#{n}",
+            name: "Ad #{n}",
+            status: "ACTIVE",
+            ad_set_id: ad_set.id
+          }
+        end)
+
+      {30, upserted} = Ads.bulk_upsert_ads(aa, attrs)
+
+      raw_ads =
+        Enum.map(1..30, fn n ->
+          %{
+            "id" => "ad_#{n}",
+            "quality_ranking" => "average",
+            "engagement_rate_ranking" => "average",
+            "conversion_rate_ranking" => "average"
+          }
+        end)
+
+      assert :ok = Ads.append_quality_ranking_snapshots(upserted, raw_ads)
+
+      ids = Enum.map(upserted, & &1.id)
+
+      rows =
+        AdButler.Repo.all(
+          from a in AdButler.Ads.Ad,
+            where: a.id in ^ids,
+            select: {a.id, a.quality_ranking_history}
+        )
+
+      assert length(rows) == 30
+
+      Enum.each(rows, fn {_id, history} ->
+        assert %{"snapshots" => [snap]} = history
+        assert snap["quality_ranking"] == "average"
+      end)
+    end
+
+    test "appends to existing history without losing prior snapshots and caps at 14" do
+      aa = insert(:ad_account)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
+
+      {1, [%{id: ad_id, meta_id: meta_id} = upserted_row]} =
+        Ads.bulk_upsert_ads(aa, [
+          %{meta_id: "ad_capped", name: "Ad", status: "ACTIVE", ad_set_id: ad_set.id}
+        ])
+
+      # Pre-seed 14 prior snapshots — at the cap.
+      prior =
+        Enum.map(1..14, fn n ->
+          %{
+            "date" => Date.add(Date.utc_today(), -n) |> Date.to_iso8601(),
+            "quality_ranking" => "above_average"
+          }
+        end)
+
+      AdButler.Repo.update_all(
+        from(a in AdButler.Ads.Ad, where: a.id == ^ad_id),
+        set: [quality_ranking_history: %{"snapshots" => prior}]
+      )
+
+      raw = [
+        %{
+          "id" => meta_id,
+          "quality_ranking" => "below_average_10_percent",
+          "engagement_rate_ranking" => nil,
+          "conversion_rate_ranking" => nil
+        }
+      ]
+
+      assert :ok = Ads.append_quality_ranking_snapshots([upserted_row], raw)
+
+      reloaded = AdButler.Repo.get!(AdButler.Ads.Ad, ad_id)
+      snapshots = reloaded.quality_ranking_history["snapshots"]
+      assert length(snapshots) == 14
+      assert List.last(snapshots)["quality_ranking"] == "below_average_10_percent"
+    end
+
+    test "skips ads whose all three rankings are nil" do
+      aa = insert(:ad_account)
+      ad_set = insert_ad_set_for(aa, insert_campaign_for_ad_account(aa))
+
+      {1, [%{id: ad_id, meta_id: meta_id} = upserted_row]} =
+        Ads.bulk_upsert_ads(aa, [
+          %{meta_id: "ad_nil", name: "Ad", status: "ACTIVE", ad_set_id: ad_set.id}
+        ])
+
+      raw = [
+        %{
+          "id" => meta_id,
+          "quality_ranking" => nil,
+          "engagement_rate_ranking" => nil,
+          "conversion_rate_ranking" => nil
+        }
+      ]
+
+      assert :ok = Ads.append_quality_ranking_snapshots([upserted_row], raw)
+
+      reloaded = AdButler.Repo.get!(AdButler.Ads.Ad, ad_id)
+      # Migration sets default `%{"snapshots" => []}` — confirm we did NOT write
+      # a null-filled snapshot on top of it.
+      assert reloaded.quality_ranking_history == %{"snapshots" => []}
     end
   end
 

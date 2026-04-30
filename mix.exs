@@ -80,7 +80,12 @@ defmodule AdButler.MixProject do
       {:plug_attack, "~> 0.4"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:broadway_rabbitmq, "~> 0.8"},
-      {:logger_json, "~> 7.0"}
+      {:logger_json, "~> 7.0"},
+      {:jido, "~> 2.2"},
+      {:jido_ai, "~> 2.1"},
+      {:req_llm, "~> 1.10"},
+      {:pgvector, "~> 0.3.1"},
+      {:contex, "~> 0.5.0"}
     ]
   end
 

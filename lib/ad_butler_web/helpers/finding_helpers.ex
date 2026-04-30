@@ -22,5 +22,9 @@ defmodule AdButlerWeb.FindingHelpers do
   def kind_label("bot_traffic"), do: "Bot Traffic"
   def kind_label("placement_drag"), do: "Placement Drag"
   def kind_label("stalled_learning"), do: "Stalled Learning"
+  def kind_label("creative_fatigue"), do: "Creative Fatigue"
+  def kind_label("frequency_ctr_decay"), do: "Frequency + CTR decay"
+  def kind_label("quality_drop"), do: "Quality ranking drop"
+  def kind_label("cpm_saturation"), do: "CPM saturation"
   def kind_label(other), do: other
 end

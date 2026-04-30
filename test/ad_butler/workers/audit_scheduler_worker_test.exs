@@ -10,6 +10,7 @@ defmodule AdButler.Workers.AuditSchedulerWorkerTest do
   alias AdButler.Repo
   alias AdButler.Workers.AuditSchedulerWorker
   alias AdButler.Workers.BudgetLeakAuditorWorker
+  alias AdButler.Workers.CreativeFatiguePredictorWorker
 
   setup do
     Repo.query!("REFRESH MATERIALIZED VIEW ad_insights_30d")
@@ -17,7 +18,7 @@ defmodule AdButler.Workers.AuditSchedulerWorkerTest do
   end
 
   describe "perform/1" do
-    test "enqueues one BudgetLeakAuditorWorker job per active ad account" do
+    test "enqueues one BudgetLeakAuditorWorker and one CreativeFatiguePredictorWorker per active ad account" do
       mc1 = insert(:meta_connection)
       mc2 = insert(:meta_connection)
       aa1 = insert(:ad_account, meta_connection: mc1)
@@ -27,6 +28,26 @@ defmodule AdButler.Workers.AuditSchedulerWorkerTest do
 
       assert_enqueued(worker: BudgetLeakAuditorWorker, args: %{"ad_account_id" => aa1.id})
       assert_enqueued(worker: BudgetLeakAuditorWorker, args: %{"ad_account_id" => aa2.id})
+      assert_enqueued(worker: CreativeFatiguePredictorWorker, args: %{"ad_account_id" => aa1.id})
+      assert_enqueued(worker: CreativeFatiguePredictorWorker, args: %{"ad_account_id" => aa2.id})
+    end
+
+    test "kill-switch (fatigue_enabled: false) enqueues only budget worker" do
+      mc = insert(:meta_connection)
+      aa = insert(:ad_account, meta_connection: mc)
+
+      original = Application.get_env(:ad_butler, :fatigue_enabled, true)
+      Application.put_env(:ad_butler, :fatigue_enabled, false)
+      on_exit(fn -> Application.put_env(:ad_butler, :fatigue_enabled, original) end)
+
+      assert :ok = perform_job(AuditSchedulerWorker, %{})
+
+      assert_enqueued(worker: BudgetLeakAuditorWorker, args: %{"ad_account_id" => aa.id})
+
+      refute_enqueued(
+        worker: CreativeFatiguePredictorWorker,
+        args: %{"ad_account_id" => aa.id}
+      )
     end
 
     test "skips ad accounts for expired/inactive meta connections" do

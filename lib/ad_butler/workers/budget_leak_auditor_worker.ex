@@ -20,6 +20,7 @@ defmodule AdButler.Workers.BudgetLeakAuditorWorker do
 
   alias AdButler.Ads
   alias AdButler.Analytics
+  alias AdButler.Workers.AuditHelpers
 
   @weights %{
     "dead_spend" => 40,
@@ -80,7 +81,7 @@ defmodule AdButler.Workers.BudgetLeakAuditorWorker do
     do: :ok
 
   defp insert_health_scores(detected_by_ad, _ad_account_id) do
-    bucket = six_hour_bucket()
+    bucket = AuditHelpers.six_hour_bucket()
     now = DateTime.utc_now()
 
     entries =
@@ -369,21 +370,33 @@ defmodule AdButler.Workers.BudgetLeakAuditorWorker do
     if MapSet.member?(open_findings, {ad_id, kind}) do
       :skipped
     else
-      case Analytics.create_finding(attrs) do
-        {:ok, finding} ->
-          Logger.info("finding created", ad_id: ad_id, kind: kind, finding_id: finding.id)
-          {:ok, finding}
-
-        {:error, reason} ->
-          Logger.error("finding creation failed",
-            ad_id: ad_id,
-            kind: kind,
-            reason: inspect(reason)
-          )
-
-          {:error, reason}
-      end
+      handle_create_result(Analytics.create_finding(attrs), ad_id, kind)
     end
+  end
+
+  defp handle_create_result({:ok, finding}, ad_id, kind) do
+    Logger.info("finding created", ad_id: ad_id, kind: kind, finding_id: finding.id)
+    {:ok, finding}
+  end
+
+  defp handle_create_result({:error, %Ecto.Changeset{} = changeset}, ad_id, kind) do
+    if AuditHelpers.dedup_constraint_error?(changeset) do
+      # Concurrent worker raced past the MapSet pre-check — treat as dedup.
+      :skipped
+    else
+      Logger.error("finding creation failed",
+        ad_id: ad_id,
+        kind: kind,
+        reason: inspect(changeset.errors)
+      )
+
+      {:error, changeset}
+    end
+  end
+
+  defp handle_create_result({:error, reason}, ad_id, kind) do
+    Logger.error("finding creation failed", ad_id: ad_id, kind: kind, reason: inspect(reason))
+    {:error, reason}
   end
 
   # ---------------------------------------------------------------------------
@@ -415,10 +428,4 @@ defmodule AdButler.Workers.BudgetLeakAuditorWorker do
   end
 
   defp placement_impressions(_), do: []
-
-  defp six_hour_bucket do
-    now = DateTime.utc_now()
-    bucket_hour = div(now.hour, 6) * 6
-    DateTime.new!(DateTime.to_date(now), Time.new!(bucket_hour, 0, 0, 0))
-  end
 end

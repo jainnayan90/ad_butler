@@ -104,7 +104,10 @@ defmodule AdButler.Sync.MetadataPipeline do
            ),
          {:ok, ads} <-
            client.list_ads(ad_account.meta_id, connection.access_token,
-             fields: "id,name,status,adset_id"
+             # Ranking fields feed `quality_ranking_history` for the creative-fatigue
+             # predictor. Meta returns null for ads that haven't accrued enough impressions.
+             fields:
+               "id,name,status,adset_id,quality_ranking,engagement_rate_ranking,conversion_rate_ranking"
            ) do
       campaign_id_map = upsert_campaigns(ad_account, campaigns)
       ad_set_id_map = upsert_ad_sets(ad_account, ad_sets, campaign_id_map)
@@ -119,7 +122,12 @@ defmodule AdButler.Sync.MetadataPipeline do
         )
       end
 
-      {upserted_count, _} = Ads.bulk_upsert_ads(ad_account, valid_ads)
+      {upserted_count, upserted} = Ads.bulk_upsert_ads(ad_account, valid_ads)
+
+      # Append a quality-ranking snapshot per upserted ad. Done after the bulk upsert
+      # because the on_conflict path replaces raw_jsonb but cannot atomically append
+      # to a JSONB array. See `Ads.append_quality_ranking_snapshots/2`.
+      Ads.append_quality_ranking_snapshots(upserted, ads)
 
       Logger.info("Metadata sync complete",
         ad_account_id: ad_account.id,

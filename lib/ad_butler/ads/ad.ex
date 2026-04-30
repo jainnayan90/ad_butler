@@ -17,6 +17,9 @@ defmodule AdButler.Ads.Ad do
     field :name, :string
     field :status, :string
     field :raw_jsonb, :map
+    # Append-only log of {date, quality_ranking, engagement_rate_ranking,
+    # conversion_rate_ranking} snapshots, capped at 14 entries.
+    field :quality_ranking_history, :map
 
     belongs_to :ad_account, AdButler.Ads.AdAccount
     belongs_to :ad_set, AdButler.Ads.AdSet
@@ -27,7 +30,7 @@ defmodule AdButler.Ads.Ad do
   end
 
   @required [:ad_account_id, :ad_set_id, :meta_id, :name, :status]
-  @optional [:creative_id, :raw_jsonb]
+  @optional [:creative_id, :raw_jsonb, :quality_ranking_history]
 
   @doc "Returns the list of required field names for bulk-filtering."
   def required_fields, do: @required

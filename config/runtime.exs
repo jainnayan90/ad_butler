@@ -55,6 +55,14 @@ if config_env() == :prod do
     meta_oauth_callback_url: System.fetch_env!("META_OAUTH_CALLBACK_URL")
 end
 
+# ReqLLM API keys: prod fails loudly via fetch_env!, dev/test fall back to .env or
+# Mox stubs. ReqLLM's Keys lookup chain is: option > app config > System.get_env.
+if config_env() == :prod do
+  config :req_llm,
+    anthropic_api_key: System.fetch_env!("ANTHROPIC_API_KEY"),
+    openai_api_key: System.fetch_env!("OPENAI_API_KEY")
+end
+
 if config_env() == :dev do
   cloak_key_dev =
     Base.decode64!(
@@ -75,6 +83,11 @@ end
 if config_env() == :prod do
   config :ad_butler, AdButlerWeb.Endpoint, server: true
 end
+
+# Creative-fatigue audit kill-switch. Hot-toggle without redeploy by setting
+# FATIGUE_ENABLED=false in the environment and restarting workers. Read in
+# `AdButler.Workers.AuditSchedulerWorker.perform/1`.
+config :ad_butler, fatigue_enabled: System.get_env("FATIGUE_ENABLED", "true") == "true"
 
 config :ad_butler, AdButlerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
