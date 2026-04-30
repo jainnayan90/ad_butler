@@ -45,6 +45,25 @@ defmodule AdButlerWeb.FindingDetailLiveTest do
       assert html =~ "Dead Spend"
     end
 
+    test "disconnected first paint renders loading placeholder + back link", %{
+      conn: conn,
+      user: user,
+      finding: finding
+    } do
+      # `live/2` runs in connected mode; use `get/2` to exercise the static
+      # disconnected render branch — the regression target for the blank-page bug
+      # captured in `solutions/liveview-issues/disconnected-render-nil-assign-blank-page-20260430.md`.
+      html =
+        conn
+        |> log_in_user(user)
+        |> get(~p"/findings/#{finding.id}")
+        |> html_response(200)
+
+      assert html =~ "Loading finding"
+      assert html =~ ~s(href="/findings")
+      refute html =~ finding.title
+    end
+
     test "renders Acknowledge button when not yet acknowledged", %{
       conn: conn,
       user: user,

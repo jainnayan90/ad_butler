@@ -92,7 +92,14 @@ defmodule AdButlerWeb.FindingsLive do
 
   @impl true
   def handle_info(:reload_on_reconnect, socket) do
-    {:noreply, load_findings(socket)}
+    ad_accounts = Ads.list_ad_accounts(socket.assigns.current_user)
+
+    socket =
+      socket
+      |> assign(:ad_accounts_list, ad_accounts)
+      |> load_findings()
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -207,13 +214,11 @@ defmodule AdButlerWeb.FindingsLive do
 
     {findings, total} = Analytics.paginate_findings(current_user, opts)
     total_pages = max(1, ceil(total / @per_page))
-    ad_accounts = Ads.list_ad_accounts(current_user)
 
     socket
     |> stream(:findings, findings, reset: true)
     |> assign(:finding_count, total)
     |> assign(:total_pages, total_pages)
-    |> assign(:ad_accounts_list, ad_accounts)
   end
 
   defp parse_page(nil), do: 1

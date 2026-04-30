@@ -233,7 +233,7 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
       {:error, reason} ->
         Logger.error("creative_fatigue_predictor: audit failed",
           ad_account_id: ad_account.id,
-          reason: inspect(reason)
+          reason: reason
         )
 
         {:error, reason}
@@ -351,7 +351,7 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
       Logger.error("finding creation failed",
         ad_id: ad_id,
         kind: "creative_fatigue",
-        reason: inspect(changeset.errors)
+        reason: changeset.errors
       )
 
       {:error, changeset}
@@ -362,7 +362,7 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
     Logger.error("finding creation failed",
       ad_id: ad_id,
       kind: "creative_fatigue",
-      reason: inspect(reason)
+      reason: reason
     )
 
     {:error, reason}

@@ -98,6 +98,46 @@ defmodule AdButlerWeb.FindingsLiveTest do
       assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/findings")
     end
 
+    test ":reload_on_reconnect loads ad_accounts once; filter changes do not re-query",
+         %{conn: conn, user: user} do
+      # Guards the S-9 perf fix: `Ads.list_ad_accounts/1` is fetched in
+      # `:reload_on_reconnect`, not in `load_findings/1`, so subsequent
+      # filter/page patches never re-query.
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/findings")
+
+      # `:reload_on_reconnect` is enqueued via `send/2` in mount and processed
+      # AFTER `live/2` returns. Drain the LV mailbox so its initial
+      # `Ads.list_ad_accounts/1` call doesn't race with our telemetry handler.
+      :sys.get_state(view.pid)
+
+      test_pid = self()
+      handler_id = "ad-accounts-counter-#{inspect(make_ref())}"
+
+      # Distinguish the dropdown-fetch query (`Ads.list_ad_accounts/1`,
+      # `LIMIT 200`) from the scope query (`Ads.list_ad_account_ids_for_user/1`,
+      # ID-only, no LIMIT) which `paginate_findings` legitimately runs every call.
+      :telemetry.attach(
+        handler_id,
+        [:ad_butler, :repo, :query],
+        fn _event, _measurements, %{source: source, query: query}, _config ->
+          if source == "ad_accounts" and query =~ "LIMIT 200" do
+            send(test_pid, :ad_accounts_dropdown_query)
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # Three filter changes: each triggers handle_params → load_findings.
+      render_change(view, "filter_changed", %{"severity" => "high"})
+      render_change(view, "filter_changed", %{"kind" => "dead_spend"})
+      render_change(view, "filter_changed", %{"severity" => "low"})
+
+      refute_received :ad_accounts_dropdown_query
+    end
+
     test "filter by kind=creative_fatigue shows only fatigue findings", %{
       conn: conn,
       user: user,

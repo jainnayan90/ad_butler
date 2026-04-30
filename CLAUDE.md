@@ -95,6 +95,24 @@ Logger.info("ad #{ad.id} paused for user #{user.id}")
 Never log secrets, tokens, or PII. Use `AdButler.Log.redact/1` when external API
 responses touch a log call.
 
+**Never wrap a metadata field in `inspect/1`.** Pass the raw term — atom, map,
+keyword list, `changeset.errors`. The Logger formatter handles serialization
+once at the boundary; pre-stringifying via `inspect/1` collapses structure and
+defeats log-aggregation filtering. `inspect/1` is for the *message string*, not
+the metadata.
+
+```elixir
+# yes
+Logger.error("audit failed", ad_account_id: id, reason: reason)
+Logger.error("finding creation failed", ad_id: id, reason: changeset.errors)
+
+# no
+Logger.error("audit failed", ad_account_id: id, reason: inspect(reason))
+```
+
+Add every new metadata key to the allowlist in `config/config.exs` Logger
+formatter — unallowlisted keys silently drop.
+
 ---
 
 ## Background Jobs — Oban, Not GenServers
@@ -192,6 +210,42 @@ socket
 Always use LiveView streams (`stream/3`, `stream_insert/3`, `stream_delete/3`) for
 collections rendered in templates. Never assign a plain list to a socket assign for a
 collection rendered in a loop.
+
+---
+
+## LiveView — Disconnected Render Must Not Be Blank
+
+Every LiveView that gates data loading behind `if connected?(socket)` MUST
+render a non-empty placeholder on the disconnected branch. The pattern
+`<div :if={@finding}>...</div>` alone is a smell — the disconnected first
+paint shows an empty body until the websocket upgrades.
+
+```heex
+<%!-- yes: placeholder + real content --%>
+<div :if={!@finding} class="...">
+  <.link navigate={~p"/findings"}>&larr; Back</.link>
+  <p class="text-gray-500">Loading…</p>
+</div>
+<div :if={@finding} class="...">
+  ... full page ...
+</div>
+```
+
+Skeletons (`animate-pulse` shaped divs) are also fine. The fix is NOT to move
+the load into `mount/3` — that re-introduces the connection-pool risk
+`connected?/1` exists to prevent.
+
+**Test the disconnected branch.** `Phoenix.LiveViewTest.live/2` runs in
+connected mode by default and will not catch a blank disconnected render.
+Add a plain `Plug.Conn` test:
+
+```elixir
+test "disconnected render is non-empty", %{conn: conn} do
+  body = conn |> get(~p"/finding/#{id}") |> html_response(200)
+  assert body =~ "Loading"
+  assert body =~ "Back"
+end
+```
 
 ---
 
