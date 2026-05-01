@@ -255,12 +255,266 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorkerTest do
     end
   end
 
-  describe "perform/1 — integration (scoring + findings)" do
+  describe "heuristic_predicted_fatigue/1" do
     setup do
-      Repo.query!("SELECT create_insights_partition((CURRENT_DATE - INTERVAL '7 days')::DATE)")
-      Repo.query!("SELECT create_insights_partition((CURRENT_DATE - INTERVAL '14 days')::DATE)")
+      Enum.each([7, 14, 21], fn d ->
+        Repo.query!(
+          "SELECT create_insights_partition((CURRENT_DATE - INTERVAL '#{d} days')::DATE)"
+        )
+      end)
 
       :ok
+    end
+
+    # 14-day declining CTR series with non-linear frequency to keep the design
+    # matrix non-singular. CTR target = 0.05 - 0.002 * d_index. Daily impressions
+    # are 2000 (above the 1000-imp honeymoon threshold) so the first 3 days
+    # establish the baseline. Projected_ctr_3d is well below 60% of baseline.
+    defp seed_declining_series(ad) do
+      reaches = [800, 1100, 950, 1200, 1050, 900, 1300, 1000, 1150, 1250, 1050, 1100, 950, 1200]
+      freqs = [1.0, 1.5, 1.2, 1.8, 1.3, 2.0, 1.4, 1.9, 1.6, 2.1, 1.7, 2.2, 1.5, 2.3]
+
+      Enum.zip([reaches, freqs, 0..13])
+      |> Enum.each(fn {reach, freq, d_index} ->
+        days_ago = 13 - d_index
+        impressions = 2_000
+        ctr_target = 0.05 - 0.002 * d_index
+        clicks = round(impressions * ctr_target)
+
+        insert_daily(ad, days_ago, %{
+          impressions: impressions,
+          clicks: clicks,
+          reach_count: reach,
+          frequency: Decimal.from_float(Float.round(freq, 4))
+        })
+      end)
+    end
+
+    test "fires when r² ≥ 0.5 AND projected_ctr_3d < 60% of honeymoon baseline" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      seed_declining_series(ad)
+
+      assert {:emit, factors} = CreativeFatiguePredictorWorker.heuristic_predicted_fatigue(ad.id)
+      assert factors.r_squared >= 0.5
+      assert factors.projected_ctr_3d < factors.baseline_ctr * 0.6
+      assert is_binary(factors.forecast_window_end)
+      assert {:ok, _} = Date.from_iso8601(factors.forecast_window_end)
+    end
+
+    test "silent when r² < 0.5 (noisy series)" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      ctrs = [
+        0.02,
+        0.04,
+        0.025,
+        0.045,
+        0.022,
+        0.038,
+        0.028,
+        0.041,
+        0.024,
+        0.043,
+        0.027,
+        0.039,
+        0.026,
+        0.042
+      ]
+
+      Enum.with_index(ctrs)
+      |> Enum.each(fn {ctr, d_index} ->
+        days_ago = 13 - d_index
+        impressions = 2_000
+        clicks = round(impressions * ctr)
+        freq = 1.0 + rem(d_index, 4) * 0.3
+
+        insert_daily(ad, days_ago, %{
+          impressions: impressions,
+          clicks: clicks,
+          reach_count: 1000 + rem(d_index * 7, 500),
+          frequency: Decimal.from_float(Float.round(freq, 4))
+        })
+      end)
+
+      assert :skip = CreativeFatiguePredictorWorker.heuristic_predicted_fatigue(ad.id)
+    end
+
+    test "silent when projected drop doesn't cross 60% threshold" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      # Mild decline: CTR = 0.05 - 0.0005 * d → at d=16 still 0.042, ~84% of
+      # honeymoon baseline (~0.0495). Above the 0.6 × baseline = 0.0297 floor.
+      reaches = [800, 1100, 950, 1200, 1050, 900, 1300, 1000, 1150, 1250, 1050, 1100, 950, 1200]
+      freqs = [1.0, 1.5, 1.2, 1.8, 1.3, 2.0, 1.4, 1.9, 1.6, 2.1, 1.7, 2.2, 1.5, 2.3]
+
+      Enum.zip([reaches, freqs, 0..13])
+      |> Enum.each(fn {reach, freq, d_index} ->
+        days_ago = 13 - d_index
+        impressions = 2_000
+        ctr_target = 0.05 - 0.0005 * d_index
+        clicks = round(impressions * ctr_target)
+
+        insert_daily(ad, days_ago, %{
+          impressions: impressions,
+          clicks: clicks,
+          reach_count: reach,
+          frequency: Decimal.from_float(Float.round(freq, 4))
+        })
+      end)
+
+      assert :skip = CreativeFatiguePredictorWorker.heuristic_predicted_fatigue(ad.id)
+    end
+
+    test "silent when honeymoon baseline is insufficient (no qualifying first days)" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      # 14 days of declining CTR but only 500 imp/day — never crosses the 1000
+      # impressions/day honeymoon gate. Regression succeeds, but baseline lookup
+      # returns :insufficient_data → predictive layer skips.
+      Enum.each(0..13, fn d_index ->
+        days_ago = 13 - d_index
+        ctr_target = 0.05 - 0.002 * d_index
+
+        insert_daily(ad, days_ago, %{
+          impressions: 500,
+          clicks: round(500 * ctr_target),
+          reach_count: 200,
+          frequency: Decimal.from_float(Float.round(1.0 + rem(d_index, 5) * 0.2, 4))
+        })
+      end)
+
+      assert :skip = CreativeFatiguePredictorWorker.heuristic_predicted_fatigue(ad.id)
+    end
+
+    test "silent when regression is insufficient (< 10 usable days)" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      Enum.each(0..6, fn d ->
+        insert_daily(ad, d, %{impressions: 2_000, clicks: 50, reach_count: 1000})
+      end)
+
+      assert :skip = CreativeFatiguePredictorWorker.heuristic_predicted_fatigue(ad.id)
+    end
+  end
+
+  describe "perform/1 — integration (scoring + findings)" do
+    setup do
+      Enum.each([7, 14, 21], fn d ->
+        Repo.query!(
+          "SELECT create_insights_partition((CURRENT_DATE - INTERVAL '#{d} days')::DATE)"
+        )
+      end)
+
+      :ok
+    end
+
+    test "predictive + frequency_ctr_decay creates finding with predicted=true and forecast date" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      # 14 days of declining CTR with high frequency. The first 3 days
+      # establish honeymoon baseline (impressions > 1000); the regression
+      # detects the decline and projects 3 days forward below 60% of baseline.
+      reaches = [800, 1100, 950, 1200, 1050, 900, 1300, 1000, 1150, 1250, 1050, 1100, 950, 1200]
+
+      Enum.with_index(reaches)
+      |> Enum.each(fn {reach, d_index} ->
+        days_ago = 13 - d_index
+        impressions = 2_000
+        ctr_target = 0.05 - 0.002 * d_index
+        clicks = round(impressions * ctr_target)
+        # Frequency rises >3.5 in the recent half so heuristic_frequency_ctr_decay
+        # fires (35 weight); combined with predicted_fatigue (25) → score 60.
+        freq = if d_index >= 7, do: 4.5 + rem(d_index, 2) * 0.3, else: 1.5 + rem(d_index, 3) * 0.2
+
+        insert_daily(ad, days_ago, %{
+          impressions: impressions,
+          clicks: clicks,
+          reach_count: reach,
+          frequency: Decimal.from_float(Float.round(freq, 4))
+        })
+      end)
+
+      assert :ok =
+               perform_job(CreativeFatiguePredictorWorker, %{"ad_account_id" => ad_account.id})
+
+      assert [%{fatigue_score: score, fatigue_factors: factors}] =
+               Repo.all(from s in AdButler.Analytics.AdHealthScore, where: s.ad_id == ^ad.id)
+
+      assert Decimal.equal?(score, 60)
+      assert Map.has_key?(factors, "frequency_ctr_decay")
+      assert Map.has_key?(factors, "predicted_fatigue")
+
+      assert [finding] =
+               Repo.all(from f in AdButler.Analytics.Finding, where: f.ad_id == ^ad.id)
+
+      assert finding.kind == "creative_fatigue"
+      assert finding.severity == "medium"
+      assert finding.title =~ "Predicted fatigue"
+      assert finding.evidence["predicted"] == true
+      assert {:ok, _} = Date.from_iso8601(finding.evidence["forecast_window_end"])
+
+      forecast_end = Date.from_iso8601!(finding.evidence["forecast_window_end"])
+      assert Date.compare(forecast_end, Date.add(Date.utc_today(), 3)) == :eq
+    end
+
+    test "predictive layer alone (weight 25) does not create a finding" do
+      mc = insert(:meta_connection)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      ad_set = insert(:ad_set, ad_account: ad_account)
+      ad = insert(:ad, ad_account: ad_account, ad_set: ad_set)
+
+      # Same declining series but frequency stays low — only predicted_fatigue fires.
+      reaches = [800, 1100, 950, 1200, 1050, 900, 1300, 1000, 1150, 1250, 1050, 1100, 950, 1200]
+      freqs = [1.0, 1.5, 1.2, 1.8, 1.3, 2.0, 1.4, 1.9, 1.6, 2.1, 1.7, 2.2, 1.5, 2.3]
+
+      Enum.zip([reaches, freqs, 0..13])
+      |> Enum.each(fn {reach, freq, d_index} ->
+        days_ago = 13 - d_index
+        impressions = 2_000
+        ctr_target = 0.05 - 0.002 * d_index
+        clicks = round(impressions * ctr_target)
+
+        insert_daily(ad, days_ago, %{
+          impressions: impressions,
+          clicks: clicks,
+          reach_count: reach,
+          frequency: Decimal.from_float(Float.round(freq, 4))
+        })
+      end)
+
+      assert :ok =
+               perform_job(CreativeFatiguePredictorWorker, %{"ad_account_id" => ad_account.id})
+
+      assert [%{fatigue_score: score, fatigue_factors: factors}] =
+               Repo.all(from s in AdButler.Analytics.AdHealthScore, where: s.ad_id == ^ad.id)
+
+      assert Decimal.equal?(score, 25)
+      assert Map.keys(factors) == ["predicted_fatigue"]
+
+      # Score 25 < 50 finding threshold → no finding emitted.
+      assert Repo.aggregate(
+               from(f in AdButler.Analytics.Finding, where: f.ad_id == ^ad.id),
+               :count
+             ) == 0
     end
 
     test "single fired heuristic writes fatigue_score below the finding threshold" do

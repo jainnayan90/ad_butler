@@ -1,75 +1,74 @@
-# Oban Worker Review — Week 7
+# Week 8 Oban Worker Review
 
-⚠️ EXTRACTED FROM AGENT MESSAGE (Write tool unavailable in agent env)
+⚠️ EXTRACTED FROM AGENT MESSAGE (Write was denied for the agent)
 
-## Summary
-
-Both workers well-structured and mirror BudgetLeakAuditor pattern faithfully. Unique-key config, queue isolation, timeout, kill-switch all solid. Three issues need attention before prod: one **BLOCKER** (non-atomic finding/score write breaks retry idempotency), two **WARNINGS**.
-
-Iron Laws: all honoured. String keys, no structs in args, `unique` fields include `:args` so `:keys` filtering works — the solved-pattern at `.claude/solutions/oban/unique-keys-requires-args-in-fields-20260429.md` is correctly applied.
+Files reviewed: `fatigue_nightly_refit_worker.ex`, `embeddings_refresh_worker.ex`, `creative_fatigue_predictor_worker.ex` (modified), `config/config.exs`. Week 7 BLOCKERs (non-atomic score/finding write, discarded `maybe_emit_finding` return, runtime.exs kill-switch) all resolved.
 
 ---
 
-## BLOCKER
+## BLOCKER 1 — `upsert_batch/3` swallows per-row errors, returns `:ok` to Oban unconditionally
 
-### Finding creation and score write are non-atomic; crash between them causes silently lost health scores on retry
-`lib/ad_butler/workers/creative_fatigue_predictor_worker.ex:211-250`
+**`embeddings_refresh_worker.ex:118–138` and `99`**
 
-`maybe_emit_finding/5` is called inside `Enum.reduce`. If all findings are inserted successfully but `Analytics.bulk_insert_fatigue_scores/1` then raises (or process dies), the job retries. On retry, `unsafe_list_open_finding_keys/1` returns those findings as already-open, so every ad hits `:skipped` branch and produces no `entry`. `entries` ends up empty, `bulk_insert_fatigue_scores([])` is a no-op, and the health score rows are lost for the entire 6-hour bucket — silently, with `:ok` return.
+`upsert_batch/3` uses `Enum.each/2` and logs on `{:error, changeset}` but discards the return. The calling clause at line 99 returns `:ok` unconditionally. Any embedding upsert failure (pgvector dimension mismatch, DB constraint) is silently ignored — Oban marks the job complete, no retry fires, and the failed row sits at its stale hash with zero alerting signal.
 
-BudgetLeakAuditorWorker avoids this by using `reduce_while` + `with` so a finding-creation failure halts immediately and bubbles `{:error, reason}`.
+**Fix:** Collect errors, emit `Logger.error` with `failure_count:` (already in allowlist), and return `{:error, :partial_upsert_failure}` if `failures > 0`.
 
-**Fix options:**
-1. Write scores for ads regardless of whether the finding was skipped (entry generated even in `:skipped` branch — upsert is idempotent so safe)
-2. Write `bulk_insert_fatigue_scores` *before* emitting findings, so on retry the scores already exist
-3. Wrap both writes in `Repo.transaction/1`
+## BLOCKER 2 — `FatigueNightlyRefitWorker` unique window (1h) escapable by Lifeline's 30-min rescue
 
----
+**`fatigue_nightly_refit_worker.ex:16`**
 
-## WARNING
+`unique: [period: 3_600, ...]`. Cron is daily (86 400s). Lifeline `rescue_after: :timer.minutes(30)`. Scenario: job starts at 03:00, gets rescued at 03:31 and rescheduled, unique window expires at 04:00, rescheduled job executes at 04:01 — full second fan-out. Child predictor jobs are deduplicated by their own 6h unique window so no duplicate predictor runs, but the refit worker itself runs twice.
 
-### `maybe_emit_finding/5` return value discarded; finding DB errors logged but don't fail job
-`lib/ad_butler/workers/creative_fatigue_predictor_worker.ex:227`
-
-```elixir
-maybe_emit_finding(ad_id, ad_account.id, score, factors, open_findings)
-# return value discarded — {:error, reason} is silently dropped
-```
-
-The `{:error, reason}` branch logs and returns `{:error, reason}`, but caller ignores it. Job returns `:ok` and Oban marks it complete, permanently losing the finding. BudgetLeakAuditor's `apply_check/5` correctly halts on `{:error, reason}`.
-
-**Fix:** Capture return and propagate: if any `maybe_emit_finding` returns `{:error, reason}`, function should return `{:error, reason}` to let Oban retry.
-
-### Kill-switch uses `Application.get_env` on a compile-time config key
-`lib/ad_butler/workers/audit_scheduler_worker.ex:33`
-
-`config :ad_butler, :fatigue_enabled, false` in `config/config.exs` is baked at compile time in Mix releases. The moduledoc implies it can "pause without redeploying," only true if set via `config/runtime.exs` using `System.get_env/2`.
-
-**Fix:** Move to `config/runtime.exs` if true hot-toggle needed:
-```elixir
-config :ad_butler, fatigue_enabled: System.get_env("FATIGUE_ENABLED", "true") == "true"
-```
-Or correct the moduledoc claim.
+**Fix:** `period: 82_800` (23h) to match daily cron intent, consistent with `DigestSchedulerWorker` and `AuditSchedulerWorker` patterns.
 
 ---
 
-## SUGGESTIONS
+## WARNING 1 — 2N uncached Repo queries from `heuristic_predicted_fatigue/1` risks 10-min timeout
 
-- **Healthy ads get no fatigue score row, unlike BudgetLeakAuditorWorker** which writes zero-score rows for all ads. Downstream queries joining both columns need NULL handling.
-- **`six_hour_bucket/0` duplicated** verbatim in both workers. Extract to shared private module.
-- **Pool size comment in `config.exs` is stale.** Total worker slots now: 10+20+5+5+5+5 = 50. Comment says `>= 25`; recommend `>= 60`.
+**`creative_fatigue_predictor_worker.ex:256–275`**
+
+Per ad: `fit_ctr_regression/1` queries `insights_daily` (14-day window) with no cache. `get_ad_honeymoon_baseline/1` has cache but falls through on miss. For N=200 ads: up to 400 added round-trips. At 20ms/query that is 8s; N=500 is 20s. Combined with other heuristics this can breach `timeout/1 => :timer.minutes(10)`.
+
+**Fix:** Pre-batch `insights_daily` for all ad IDs in a single query and split in Elixir, OR raise timeout to 20 min with backlog item.
+
+## WARNING 2 — Nightly refit fan-out silently absorbed by 6h predictor unique window
+
+**`creative_fatigue_predictor_worker.ex:24–27`**
+
+`unique: [period: 21_600, ...]`. If 00:03 6h audit completed, predictor jobs are still in unique window at 03:00. Nightly refit fan-out produces only `conflict?` jobs. Documented in moduledoc — no bug, but expect refit `count` log to regularly show 0 non-conflicted jobs.
+
+## WARNING 3 — Default backoff thrashes on rate limits; 3 attempts exhausted in ~75s
+
+**`embeddings_refresh_worker.ex:21`**
+
+Default Oban backoff: ~15s, ~60s. OpenAI rate limit resets ~60s. All 3 attempts can be consumed inside the rate-limit window, permanently discarding the batch until the next 30-min cron.
+
+**Fix:** Return `{:snooze, 90}` for `:rate_limit` so attempt counter is not consumed.
+
+## WARNING 4 — 25-min unique window vs 30-min cron leaves backfill overlap gap
+
+**`embeddings_refresh_worker.ex:24`**
+
+`unique: [period: 1_500, ...]`. If a run during initial backfill takes >25 min, two jobs overlap. Upsert is idempotent (correct data) but doubles embedding API cost. Low risk at steady state.
 
 ---
 
-## Queue & Config Assessment
+## SUGGESTION — Logger `expected` semantics inverted in vector mismatch log
 
-- `fatigue_audit: 5` concurrency — appropriate for DB-bound I/O heuristics
-- `timeout/1` returning `:timer.minutes(10)` — correct, matches Lifeline's `rescue_after: 30min`
-- `max_attempts: 3` — conservative and appropriate for a 6-hour scheduled audit
-- Cron `"3 */6 * * *"` — 6-hour period aligns with `unique: [period: 21_600]`; 3-min offset avoids contention with `SyncAllConnectionsWorker`
-- Lifeline and Pruner plugins both configured
+**`embeddings_refresh_worker.ex:103–108`**
 
-## Idempotency Assessment
+`count: length(candidates)` is what was sent; `expected: length(vectors)` is what came back — opposite of conventional naming. Swap labels or rename `vectors_received`.
 
-- **AuditSchedulerWorker:** Fully idempotent
-- **CreativeFatiguePredictorWorker:** Idempotent on the finding side; partially non-idempotent on the health score side due to BLOCKER above. The upsert itself (`on_conflict: {:replace, [:fatigue_score, :fatigue_factors, :inserted_at]}`) correctly preserves budget worker columns — no cross-worker clobber risk.
+---
+
+## Queue Config
+
+- No Oban queue overrides in `runtime.exs` — `:embeddings: 3` takes effect from `config.exs`. Confirmed.
+- Pool size comment correctly updated.
+- Cron entries present and correctly formatted.
+- 03:00 audit queue: refit is fast fan-out on `:audit`; predictor children go to `:fatigue_audit`. AuditScheduler fires at 03:03. No starvation.
+
+## Logger Allowlist
+
+All new metadata keys present in allowlist: `kind`, `count`, `reason`, `ad_id`, `finding_id`, `expected`, `ad_account_id`, `ads_audited`, `ads_with_signals`. No `inspect/1` wrapping.

@@ -1,58 +1,62 @@
-# Iron Law Review — Week 7 Creative Fatigue
+# Week 8 Iron Law Review
 
-⚠️ EXTRACTED FROM AGENT MESSAGE (Write tool unavailable in agent env)
+⚠️ EXTRACTED FROM AGENT MESSAGE (Write was denied for the agent)
 
-**Files scanned:** 10 | **Iron Laws checked:** 20 | **Violations:** 3 (1 BLOCKER, 1 WARNING, 1 SUGGESTION)
+Files scanned: 11 | Laws checked: 18 | **Violations: 5 (0 BLOCKER, 3 WARNING, 2 SUGGESTION)**
 
 ---
 
-## BLOCKER
+## Carried-Forward from Week 7 (unresolved)
 
-### [Iron Law #15/#16] N+1 `Repo.update_all` in `append_quality_ranking_snapshots`
-`lib/ad_butler/ads.ex:550-561`
-
-```elixir
-Enum.each(pairs, fn {ad_id, snapshot} -> ... Repo.update_all(...) end)
-```
-
-Confidence: DEFINITE — one UPDATE per ad inside `Enum.each`. 50 ads → 50 serial DB round-trips per metadata sync. Both Iron Law #15 (N+1) and #16 (bulk ops > 10 rows) violated.
-
-**Fix:** Build the complete `{ad_id → new_history}` map in memory, then a single `Repo.insert_all` with `on_conflict: {:replace, [:quality_ranking_history]}` — or `Repo.update_all` with a `CASE/WHEN` fragment. `load_existing_history/1` already bulk-fetches in one query; the write side must match.
+The three Week 7 findings (N+1 `Repo.update_all` in `ads.ex:550`, silent `with true <-` in `analytics.ex:348`, `inspect(v)` in `finding_detail_live.ex:233`) were not touched in the Week 8 diff and remain open.
 
 ---
 
 ## WARNING
 
-### [Iron Law #8] `with true <- prior_cpm > 0` silently swallows a false branch
-`lib/ad_butler/analytics.ex:348-354`
+### [Iron Law #15] N+1 upserts in `EmbeddingsRefreshWorker.upsert_batch/3`
+**File:** `lib/ad_butler/workers/embeddings_refresh_worker.ex:118-138`
 
-Bare boolean in a `with` chain falls to `else _ -> nil` with no log, no error tag, no distinguishable reason. If `avg_cpm/1` ever returns `{:ok, 0.0}` for a valid zero-spend window, this silently drops the result. Iron Law #8: no silent error swallowing.
+`Enum.each` calls `Embeddings.upsert/1` (one `Repo.insert`) per candidate — up to `@batch_size = 100` serial round-trips per cron tick.
 
-**Fix:** Remove the boolean guard and handle zero-prior-CPM inside `avg_cpm/1`. Never use `true <- expr` in a `with` chain.
+**Fix:** Build a list of maps and call `Repo.insert_all(Embedding, rows, on_conflict: ..., conflict_target: [:kind, :ref_id])` once. Check the returned row count against `length(candidates)` for the error log.
+
+### [Iron Law #7 — Logger allowlist] Misleading key `ad_id:` for non-ad embedding failures
+**File:** `lib/ad_butler/workers/embeddings_refresh_worker.ex:133`
+
+When `kind` is `"finding"` or `"doc_chunk"` the value logged under `:ad_id` is a finding or chunk UUID. Misleads log queries.
+
+**Fix:** Change key to `ref_id: c.ref_id` and add `:ref_id` to the allowlist in `config/config.exs`.
+
+### [Iron Law #14 — N+1 queries] `heuristic_predicted_fatigue/1` issues 2 per-ad queries inside the ad loop
+**File:** `lib/ad_butler/workers/creative_fatigue_predictor_worker.ex:256-275`
+
+`Analytics.fit_ctr_regression/1` and `Analytics.get_ad_honeymoon_baseline/1` (cache miss) run per ad inside `run_all_heuristics/1`. Acceptable at current ad counts but degrades.
+
+**Fix (pragmatic):** Bulk-fetch the 14-day `insights_daily` window for all `ad_ids` in a single `ad_id IN ^ad_ids` query before the loop, then group by `ad_id`. Add a TODO comment.
 
 ---
 
 ## SUGGESTION
 
-### [Iron Law #10] `inspect(v)` in fallback `format_fatigue_values` exposes internal term syntax to UI
-`lib/ad_butler_web/live/finding_detail_live.ex:233`
+### [Iron Law #1] `doc_ref_id/1` derivation deserves a comment
+**File:** `lib/mix/tasks/ad_butler.seed_help_docs.ex:93-96`
 
-Currently unreachable in prod (all heuristic shapes matched above), but pattern is fragile. A future heuristic with unexpected value shape would render Elixir internal syntax (`#PID<>`, struct reprs) directly in user-facing HTML. Per Iron Law #10, `inspect/1` is a developer tool and must not surface in the UI.
+Private function — `@doc` not required. But the SHA-256 → first 16 bytes → UUID derivation is non-obvious and the `conflict_target` invariant depends on it being stable. One-line comment recommended.
 
-**Fix:** Replace fallback with `defp format_fatigue_values(_kind, _values), do: ""` and add a `Logger.warning("format_fatigue_values: unrecognised kind #{kind}")`.
+### [Iron Law #12 — Secrets] ReqLLM API key sourcing
+**File:** `lib/ad_butler/embeddings/service.ex:28`
 
----
-
-## Migration Safety (no violation)
-
-Migration #2 (`make_leak_score_nullable`) is correctly structured: `def up` / `def down` with a backfill UPDATE before re-imposing `NOT NULL` in the rollback path. Follows CLAUDE.md three-migration pattern. Safe to merge.
+Verify ReqLLM's OpenAI key sourced via `System.fetch_env!` in `runtime.exs`. (Security agent confirmed: present at `.env.example:62-67`, loaded in `runtime.exs:60-64`.)
 
 ---
 
-## Verified Clean
+## Verified Clean (Week 8 new code)
 
-- Worker never calls Repo directly (Iron Law #1 pass)
-- All `unsafe_*` functions consistently named and documented
-- Oban worker uses string keys, has `unique:`, stores only IDs
-- `findings_live.ex` uses `stream/3` and pagination
-- No `String.to_atom`, no `raw(`, no DaisyUI classes in changed files
+- All 3 migrations reversible.
+- Both new workers use `Oban.Worker` with `unique:` — no GenServer timer loops.
+- Embeddings service uses Behaviour + `Application.get_env` indirection.
+- No `String.to_atom`, no DaisyUI in new files.
+- All Logger keys in new files in the `config/config.exs` allowlist.
+- All new public functions have `@doc` + `@spec`; all new modules have `@moduledoc`.
+- `Repo` called only from context modules.

@@ -23,6 +23,12 @@ defmodule AdButler.Analytics.AdHealthScore do
   @foreign_key_type :binary_id
 
   schema "ad_health_scores" do
+    # Cross-context FK as raw `field` to keep `Analytics` decoupled from
+    # `AdButler.Ads.Ad` at compile time. Callers that need the ad fetch via
+    # `Ads.get_ad!/1` rather than `Repo.preload/3`. The DB-level FK
+    # (priv/repo/migrations/20260427000001_create_ad_health_scores.exs:7)
+    # plus `foreign_key_constraint(:ad_id)` in the changeset still surface a
+    # deleted-ad as a clean `{:error, changeset}`.
     field :ad_id, :binary_id
 
     field :computed_at, :utc_datetime_usec
@@ -30,6 +36,7 @@ defmodule AdButler.Analytics.AdHealthScore do
     field :fatigue_score, :decimal
     field :leak_factors, :map
     field :fatigue_factors, :map
+    field :metadata, :map
     field :recommended_action, :string
 
     field :inserted_at, :utc_datetime_usec
@@ -43,6 +50,7 @@ defmodule AdButler.Analytics.AdHealthScore do
     :fatigue_score,
     :leak_factors,
     :fatigue_factors,
+    :metadata,
     :recommended_action
   ]
 
@@ -58,5 +66,6 @@ defmodule AdButler.Analytics.AdHealthScore do
     |> validate_required(@required)
     |> validate_number(:leak_score, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
     |> validate_number(:fatigue_score, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
+    |> foreign_key_constraint(:ad_id)
   end
 end

@@ -7,11 +7,19 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
   `unique`, dedups findings on `(ad_id, kind)` while unresolved, and writes a
   fatigue row to `ad_health_scores` for each ad inspected.
 
-  Heuristics are filled in across W7D2–W7D4:
+  Heuristics are filled in across W7D2–W7D4 plus the W8D2 predictive layer:
 
     * `heuristic_frequency_ctr_decay/1` — frequency > 3.5 AND ctr_slope < -0.1 (W7D2)
     * `heuristic_quality_drop/1` — quality_ranking dropped within 7d (W7D3)
     * `heuristic_cpm_saturation/1` — 7d/prior-7d CPM change > 20% (W7D4)
+    * `heuristic_predicted_fatigue/1` — regression-based forecast: r² >= 0.5 AND
+      projected_ctr_3d < 0.6 × honeymoon baseline (W8D2)
+
+  The predictive layer carries weight 25 — below the 50 finding threshold on its
+  own, so it requires at least one present-tense heuristic to combine with
+  before a finding is emitted. When the predictive signal contributes to a
+  finding, the title is prefixed with "Predicted fatigue:" and `evidence.predicted`
+  is set to `true` with `evidence.forecast_window_end` pinned to today + 3 days.
   """
   use Oban.Worker,
     queue: :fatigue_audit,
@@ -42,8 +50,17 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
   @weights %{
     "frequency_ctr_decay" => 35,
     "quality_drop" => 30,
-    "cpm_saturation" => 25
+    "cpm_saturation" => 25,
+    "predicted_fatigue" => 25
   }
+
+  # Predictive layer thresholds (W8D2). r² gate keeps weak fits out — a slope on
+  # noise still has a slope. CTR-drop gate triggers when the projected CTR falls
+  # below 60% of the ad's honeymoon baseline — anchored on a per-ad history rather
+  # than an absolute floor so high-CTR and low-CTR ads use comparable bars.
+  @predicted_r_squared_threshold 0.5
+  @predicted_ctr_drop_ratio 0.6
+  @predicted_forecast_days 3
 
   @doc "Returns the per-heuristic weight map."
   @spec weights() :: %{String.t() => non_neg_integer()}
@@ -141,7 +158,7 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
     latest_rank = latest["quality_ranking"]
     latest_score = Map.get(@ranking_order, latest_rank)
 
-    if latest_score == nil do
+    if is_nil(latest_score) do
       :skip
     else
       find_drop(latest_rank, latest_score, older, cutoff)
@@ -210,15 +227,86 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
   end
 
   # ---------------------------------------------------------------------------
+  # Heuristic — predictive regression (W8D2)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Heuristic 4: returns `{:emit, factors}` when `Analytics.fit_ctr_regression/1`
+  produces an r² of at least #{@predicted_r_squared_threshold} and the projected
+  3-day-out CTR falls below #{Float.round(@predicted_ctr_drop_ratio * 100, 0)}%
+  of the ad's honeymoon baseline.
+
+  Returns `:skip` whenever either input is `:insufficient_data` (fewer than 10
+  usable days, or singular feature matrix), or when one of the gates fails.
+
+  Factors carry the slope, projected CTR, baseline CTR, r², and the iso8601
+  forecast window end so finding evidence can render the projection without
+  re-running the regression.
+  """
+  @spec heuristic_predicted_fatigue(binary()) ::
+          {:emit,
+           %{
+             slope_per_day: float(),
+             projected_ctr_3d: float(),
+             baseline_ctr: float(),
+             r_squared: float(),
+             forecast_window_end: String.t()
+           }}
+          | :skip
+  def heuristic_predicted_fatigue(ad_id) do
+    decide_predicted(
+      Analytics.fit_ctr_regression(ad_id),
+      Analytics.get_ad_honeymoon_baseline(ad_id)
+    )
+  end
+
+  @doc """
+  Same as `heuristic_predicted_fatigue/1` but operates on a pre-fetched 14-day
+  slice of `insights_daily` rows. Used by `audit_account/1` after a single
+  bulk fetch to collapse the per-ad N+1.
+  """
+  @spec heuristic_predicted_fatigue(binary(), [map()]) ::
+          {:emit, map()} | :skip
+  def heuristic_predicted_fatigue(ad_id, rows) when is_list(rows) do
+    decide_predicted(
+      Analytics.fit_ctr_regression(ad_id, rows),
+      Analytics.get_ad_honeymoon_baseline(ad_id, rows)
+    )
+  end
+
+  defp decide_predicted({:ok, regression}, {:ok, baseline}) do
+    drop_threshold = baseline.baseline_ctr * @predicted_ctr_drop_ratio
+
+    if regression.r_squared >= @predicted_r_squared_threshold and
+         regression.projected_ctr_3d < drop_threshold do
+      forecast_end = Date.add(Date.utc_today(), @predicted_forecast_days)
+
+      {:emit,
+       %{
+         slope_per_day: regression.slope_per_day,
+         projected_ctr_3d: regression.projected_ctr_3d,
+         baseline_ctr: baseline.baseline_ctr,
+         r_squared: regression.r_squared,
+         forecast_window_end: Date.to_iso8601(forecast_end)
+       }}
+    else
+      :skip
+    end
+  end
+
+  defp decide_predicted(_, _), do: :skip
+
+  # ---------------------------------------------------------------------------
   # Private — main audit flow
   # ---------------------------------------------------------------------------
 
   defp audit_account(ad_account) do
     ad_ids = Ads.unsafe_list_ad_ids_for_account(ad_account.id)
     open_findings = Analytics.unsafe_list_open_finding_keys(ad_ids)
+    insights_by_ad = Analytics.unsafe_list_insights_window_for_ads(ad_ids, 14)
     bucket = AuditHelpers.six_hour_bucket()
 
-    case build_entries(ad_ids, ad_account.id, open_findings, bucket) do
+    case build_entries(ad_ids, ad_account.id, open_findings, insights_by_ad, bucket) do
       {:ok, entries} ->
         Analytics.bulk_insert_fatigue_scores(entries)
 
@@ -244,9 +332,11 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
   # `maybe_emit_finding/5` halts and propagates so Oban retries the whole batch.
   # Score entries are still emitted on `:skipped` (dedup) — the upsert is idempotent
   # so retries do not lose score data.
-  defp build_entries(ad_ids, ad_account_id, open_findings, bucket) do
+  defp build_entries(ad_ids, ad_account_id, open_findings, insights_by_ad, bucket) do
     Enum.reduce_while(ad_ids, {:ok, []}, fn ad_id, {:ok, acc} ->
-      case audit_one_ad(ad_id, ad_account_id, open_findings, bucket) do
+      ad_rows = Map.get(insights_by_ad, ad_id, [])
+
+      case audit_one_ad(ad_id, ad_account_id, open_findings, ad_rows, bucket) do
         {:ok, nil} -> {:cont, {:ok, acc}}
         {:ok, entry} -> {:cont, {:ok, [entry | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -254,41 +344,63 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
     end)
   end
 
-  defp audit_one_ad(ad_id, ad_account_id, open_findings, bucket) do
-    case run_all_heuristics(ad_id) do
+  defp audit_one_ad(ad_id, ad_account_id, open_findings, ad_rows, bucket) do
+    case run_all_heuristics(ad_id, ad_rows) do
       [] ->
         {:ok, nil}
 
       triggered ->
         score = compute_fatigue_score(triggered)
         factors = build_factors_map(triggered)
+        metadata = build_metadata(ad_id, ad_rows)
 
         case maybe_emit_finding(ad_id, ad_account_id, score, factors, open_findings) do
           {:error, reason} ->
             {:error, reason}
 
           _ok_or_skipped ->
-            {:ok, build_entry(ad_id, score, factors, bucket)}
+            {:ok, build_entry(ad_id, score, factors, metadata, bucket)}
         end
     end
   end
 
-  defp build_entry(ad_id, score, factors, bucket) do
+  # Always populates `:metadata` so `bulk_insert_fatigue_scores/1`'s
+  # unconditional `:metadata` replace doesn't clear the cached honeymoon
+  # baseline (W2). When the baseline can't be derived, we still write `%{}`
+  # so a future run can populate it without first having to deal with `nil`.
+  defp build_metadata(ad_id, ad_rows) do
+    case Analytics.get_ad_honeymoon_baseline(ad_id, ad_rows) do
+      {:ok, baseline} ->
+        %{
+          "honeymoon_baseline" => %{
+            "baseline_ctr" => baseline.baseline_ctr,
+            "window_dates" => Enum.map(baseline.window_dates, &Date.to_iso8601/1)
+          }
+        }
+
+      {:error, _} ->
+        %{}
+    end
+  end
+
+  defp build_entry(ad_id, score, factors, metadata, bucket) do
     %{
       id: Ecto.UUID.generate(),
       ad_id: ad_id,
       computed_at: bucket,
       fatigue_score: Decimal.new(score),
       fatigue_factors: factors,
+      metadata: metadata,
       inserted_at: DateTime.utc_now()
     }
   end
 
-  defp run_all_heuristics(ad_id) do
+  defp run_all_heuristics(ad_id, ad_rows) do
     [
       {"frequency_ctr_decay", heuristic_frequency_ctr_decay(ad_id)},
       {"quality_drop", heuristic_quality_drop(ad_id)},
-      {"cpm_saturation", heuristic_cpm_saturation(ad_id)}
+      {"cpm_saturation", heuristic_cpm_saturation(ad_id)},
+      {"predicted_fatigue", heuristic_predicted_fatigue(ad_id, ad_rows)}
     ]
     |> Enum.flat_map(fn
       {kind, {:emit, factors}} -> [{kind, factors}]
@@ -305,7 +417,8 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
 
   defp build_factors_map(triggered) do
     Map.new(triggered, fn {kind, factors} ->
-      {kind, %{"weight" => Map.get(@weights, kind, 0), "values" => factors}}
+      stringified = Map.new(factors, fn {k, v} -> {to_string(k), v} end)
+      {kind, %{"weight" => Map.get(@weights, kind, 0), "values" => stringified}}
     end)
   end
 
@@ -324,12 +437,36 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
           ad_account_id: ad_account_id,
           kind: "creative_fatigue",
           severity: severity_for_score(score),
-          title: "Ad showing fatigue signals",
+          title: render_finding_title(factors),
           body: render_finding_body(factors),
-          evidence: factors
+          evidence: build_evidence(factors)
         }
 
         handle_create_result(Analytics.create_finding(attrs), ad_id)
+    end
+  end
+
+  # When the predictive layer contributes, surface the projection at evidence
+  # top level so consumers (Findings UI, chat tools) can render the forecast
+  # without traversing the per-heuristic factor tree.
+  defp build_evidence(factors) do
+    case Map.get(factors, "predicted_fatigue") do
+      %{"values" => %{"forecast_window_end" => end_date}} ->
+        Map.merge(factors, %{
+          "predicted" => true,
+          "forecast_window_end" => end_date
+        })
+
+      _ ->
+        factors
+    end
+  end
+
+  defp render_finding_title(factors) do
+    if Map.has_key?(factors, "predicted_fatigue") do
+      "Predicted fatigue: ad showing fatigue signals"
+    else
+      "Ad showing fatigue signals"
     end
   end
 
@@ -373,15 +510,37 @@ defmodule AdButler.Workers.CreativeFatiguePredictorWorker do
   defp severity_for_score(_), do: "low"
 
   defp render_finding_body(factors) do
-    factors
-    |> Map.keys()
-    |> Enum.sort()
-    |> Enum.map_join(", ", &format_factor_label/1)
-    |> then(&"Triggered heuristics: #{&1}")
+    summary =
+      factors
+      |> Map.keys()
+      |> Enum.sort()
+      |> Enum.map_join(", ", &format_factor_label/1)
+
+    case Map.get(factors, "predicted_fatigue") do
+      %{"values" => v} ->
+        "Triggered heuristics: #{summary}. " <> format_predictive_clause(v)
+
+      _ ->
+        "Triggered heuristics: #{summary}"
+    end
   end
+
+  defp format_predictive_clause(values) do
+    proj = Map.get(values, "projected_ctr_3d")
+    base = Map.get(values, "baseline_ctr")
+    r2 = Map.get(values, "r_squared")
+    end_date = Map.get(values, "forecast_window_end")
+
+    "Forecast: CTR projected to #{format_pct(proj, 3)} by #{end_date} " <>
+      "vs honeymoon baseline #{format_pct(base, 3)} (r² #{format_pct(r2 || 0.0, 2)})."
+  end
+
+  defp format_pct(nil, _), do: "n/a"
+  defp format_pct(value, decimals), do: "#{Float.round(value * 100, decimals)}%"
 
   defp format_factor_label("frequency_ctr_decay"), do: "frequency + CTR decay"
   defp format_factor_label("quality_drop"), do: "quality ranking drop"
   defp format_factor_label("cpm_saturation"), do: "CPM saturation"
+  defp format_factor_label("predicted_fatigue"), do: "predictive regression"
   defp format_factor_label(other), do: other
 end

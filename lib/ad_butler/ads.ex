@@ -142,6 +142,13 @@ defmodule AdButler.Ads do
     )
   end
 
+  @doc "Returns all `Ad.id` values owned by `user` (via the `MetaConnection` → `AdAccount` chain)."
+  @spec list_ad_ids_for_user(Accounts.User.t()) :: [binary()]
+  def list_ad_ids_for_user(%Accounts.User{} = user) do
+    aa_ids = list_ad_account_ids_for_user(user)
+    Repo.all(from a in Ad, where: a.ad_account_id in ^aa_ids, select: a.id)
+  end
+
   @doc "Streams active AdAccounts for internal scheduler use. Must be called inside a transaction."
   @spec stream_active_ad_accounts() :: Enum.t()
   def stream_active_ad_accounts do
@@ -178,6 +185,24 @@ defmodule AdButler.Ads do
     |> where([a], a.ad_account_id == ^ad_account_id)
     |> select([a], a.id)
     |> Repo.all()
+  end
+
+  @doc """
+  UNSAFE — returns every ad row's `id`, `name`, and (left-joined) creative
+  `name`. No tenant scope. Used by the cross-tenant `EmbeddingsRefreshWorker`
+  to compute source text for each ad. Internal worker use only — never
+  expose to user-facing surfaces.
+  """
+  @spec unsafe_list_ads_with_creative_names() :: [
+          %{id: binary(), name: String.t() | nil, creative_name: String.t() | nil}
+        ]
+  def unsafe_list_ads_with_creative_names do
+    Repo.all(
+      from a in Ad,
+        left_join: c in Creative,
+        on: c.id == a.creative_id,
+        select: %{id: a.id, name: a.name, creative_name: c.name}
+    )
   end
 
   @doc "Returns the `AdAccount` matching `(meta_connection_id, meta_id)`, or `nil`."

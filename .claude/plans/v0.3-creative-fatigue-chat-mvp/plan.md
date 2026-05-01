@@ -168,36 +168,36 @@ Confirmation flow:
 
 #### Day 1 — Predictive Regression Skeleton
 
-- [ ] [W8D1-T1][ecto] `Analytics.get_ad_honeymoon_baseline/1` — finds the ad's honeymoon window (first 3 days with > 1000 impressions/day) and returns avg CTR for that window. Cached on `ad_health_scores.metadata` JSONB after first compute.
-- [ ] [W8D1-T2][ecto] `Analytics.fit_ctr_regression/1` — last 14 days of daily CTR for an ad with `frequency` and `cumulative_reach` as features. Plain Elixir multiple linear regression (small enough — `:math.pow` + matrix solve via Gauss-Jordan in a private helper). Returns `{:ok, %{slope_per_day: float, intercept: float, projected_ctr_3d: float, r_squared: float}}` or `{:error, :insufficient_data}` (< 10 days).
-- [ ] [W8D1-T3] Tests: hand-computed regressions for 3 fixture series (declining, stable, noisy); assert projected CTR within tolerance.
+- [x] [W8D1-T1][ecto] `Analytics.get_ad_honeymoon_baseline/1` — added migration `20260501000001_add_metadata_to_ad_health_scores.exs` (ad_health_scores.metadata JSONB column was not yet provisioned); function is read-only (cache→compute), worker is responsible for persisting via existing `bulk_insert_fatigue_scores/1` (now also replaces `:metadata` on conflict). 6 tests.
+- [x] [W8D1-T2][ecto] `Analytics.fit_ctr_regression/1` — model is CTR ~ β₀ + β_day·d + β_freq·f + β_reach·cumreach (cumulative_reach computed as running sum of reach_count within the 14-day window since insights_daily has no native column). 4×5 augmented matrix solved via Gauss-Jordan with partial pivoting. Singular features → `:insufficient_data` (collinearity twin of "no signal"). projected_ctr_3d extrapolates frequency + cumulative_reach via per-feature OLS slopes — keeps the prediction internally consistent.
+- [x] [W8D1-T3] 5 tests: declining (r²>0.99, projected within 0.005 of true), stable (r²==0.0, slope≈0), noisy (r²<0.5), insufficient (<10 days), zero-impression rows skipped from row count.
 
 #### Day 2 — Predictive Findings + Nightly Fit
 
-- [ ] [W8D2-T1][oban] `CreativeFatiguePredictorWorker` adds predictive layer: if `r_squared >= 0.5 AND projected_ctr_3d < 0.6 * honeymoon_baseline`, emit signal `:predicted_fatigue`. Weight: 25.
-- [ ] [W8D2-T2][oban] Findings: when predictive layer fires, create finding with `evidence.predicted: true` and `evidence.forecast_window_end: <date+3>`. Title prefix "Predicted fatigue". Body explains the projection and r-squared.
-- [ ] [W8D2-T3] Add a separate cron entry: `FatigueNightlyRefitWorker` runs at 03:00 daily, enqueues `CreativeFatiguePredictorWorker` for all active ad_accounts. (Audits within the day still run on the existing 6h cycle for heuristics; nightly run refreshes regression baselines.)
-- [ ] [W8D2-T4] Tests: predictive layer silent when `r_squared < 0.5`; predictive layer fires when CTR projected drop crosses 60% threshold.
+- [x] [W8D2-T1][oban] `heuristic_predicted_fatigue/1` added; weight 25 in @weights; gates `r² >= 0.5` AND `projected_ctr_3d < 0.6 × baseline_ctr`. Below the 50 finding threshold standalone — designed to amplify a present-tense heuristic rather than fire alone.
+- [x] [W8D2-T2][oban] `build_evidence/1` lifts `predicted: true` and `forecast_window_end` to top-level evidence when the predictive signal contributed; `render_finding_title/1` prefixes "Predicted fatigue:". Body renderer adds a forecast clause.
+- [x] [W8D2-T3] `FatigueNightlyRefitWorker` at `0 3 * * *` cron, queue `:audit`, respects `:fatigue_enabled` kill-switch, dedups via Oban unique within 1h window, only enqueues `CreativeFatiguePredictorWorker` (heuristics' 6h cycle is independent).
+- [x] [W8D2-T4] 7 tests (5 heuristic + 2 integration): fires/silent on r², drop threshold, baseline insufficiency, regression insufficiency. Integration test asserts `evidence.predicted == true` + forecast date + "Predicted fatigue" title prefix; second test confirms predictive alone (score 25) does not create finding.
 
 #### Day 3 — Add Deps + ReqLLM Smoke + Embeddings Schema
 
-- [ ] [W8D3-T1][ecto] Migration: `CREATE EXTENSION IF NOT EXISTS vector` (separate up/down). Also add `embeddings` table: `id uuid pk`, `kind text` (enum check: `'ad' | 'finding' | 'doc_chunk'`), `ref_id uuid`, `embedding vector(1536)`, `content_hash text` (for change detection), `content_excerpt text`, `metadata jsonb`, `inserted_at`, `updated_at`. Unique `(kind, ref_id)`.
-- [ ] [W8D3-T2][ecto] Migration: `CREATE INDEX embeddings_hnsw_idx ON embeddings USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)`. Down: `DROP INDEX`.
-- [ ] [W8D3-T3][ecto] `AdButler.Embeddings.Embedding` schema with `Pgvector.Ecto.Vector` field type. `AdButler.Embeddings` context with `upsert/1`, `nearest/3` (kind, query_vector, limit). Cosine distance via `Pgvector.Ecto.Query.cosine_distance/2`.
-- [ ] [W8D3-T4][ecto] `AdButler.Embeddings.Service` behaviour with `embed_text/1` callback. Real impl wraps `ReqLLM.embed("openai:text-embedding-3-small", text)`. Test impl via Mox returns deterministic vectors.
+- [x] [W8D3-T1][ecto] Migration `20260501000002_create_embeddings.exs` provisions extension + table together (vector(1536) requires the extension to exist before column creation). Kind CHECK constraint added separately via raw SQL since Ecto migrations don't have a built-in helper. Required `brew install pgvector` on local Postgres@17 — recorded the install step in scratchpad. Postgrex types module `AdButler.PostgrexTypes` registered in `lib/ad_butler/postgrex_types.ex` with `Pgvector.extensions()` and wired via `config :ad_butler, AdButler.Repo, types: ...`.
+- [x] [W8D3-T2][ecto] Migration `20260501000003_add_embeddings_hnsw_index.exs` — `CREATE INDEX CONCURRENTLY` with `@disable_ddl_transaction true`. m=16, ef_construction=64 per D0011.
+- [x] [W8D3-T3][ecto] `AdButler.Embeddings.Embedding` schema with `Pgvector.Ecto.Vector` field type, kind validation, content_hash 64-char check, unique_constraint. `AdButler.Embeddings` context: `hash_content/1` (SHA-256 hex), `upsert/1` (replaces embedding + hash + excerpt + metadata + updated_at on (kind, ref_id) conflict, `returning: true` so the existing row's id roundtrips on UPDATE), `nearest/3` (cosine distance via `<=>` fragment), `list_ref_id_hashes/1` (for refresh worker diffing). 12 tests.
+- [x] [W8D3-T4][ecto] `Embeddings.ServiceBehaviour` with single batched `embed/1` callback. Real impl `Embeddings.Service` reads `:embeddings_model` config (default `"openai:text-embedding-3-small"`) and delegates to `ReqLLM.embed/2`. Mox: `Embeddings.ServiceMock` defined in `test/support/mocks.ex`, wired in `config/test.exs`.
 
 #### Day 4 — Embeddings Backfill Worker
 
-- [ ] [W8D4-T1][oban] `EmbeddingsRefreshWorker` (Oban, cron `*/30 * * * *`): for each kind (`:ad`, `:finding`), find rows where `content_hash` differs from current text hash (or no embedding row exists). Batch up to 100 per run. Calls `Embeddings.Service.embed_text/1` (batches via `ReqLLM.embed/3` with a list).
-- [ ] [W8D4-T2][oban] Per-text-hash check: SHA-256 of source content (e.g., `"#{ad.name} | #{creative.body}"` for ads). Skip embed if hash unchanged. Per `03-token-monitoring.md` §6 (avoid re-embedding unchanged content).
-- [ ] [W8D4-T3] One-shot doc corpus: write 10–15 short markdown help docs into `priv/embeddings/help/` — "What does CTR mean?", "How to read findings", "What is fatigue", etc. Add a `seed_help_docs/0` mix task that hashes + chunks + embeds them on demand.
-- [ ] [W8D4-T4] Tests: backfill is idempotent (no re-embed on second run); only changed ads re-embed; rate-limit on ReqLLM (mocked) leaves the row untouched and retries.
+- [x] [W8D4-T1][oban] `EmbeddingsRefreshWorker` cron `*/30 * * * *`, queue `:embeddings` (concurrency 3 added to Oban queues). Processes `"ad"` and `"finding"` kinds in sequence per tick; batch_size 100. Renamed callback from `embed_text/1` to `embed/1` (single batched callback — splitting would duplicate provider call).
+- [x] [W8D4-T2][oban] `Embeddings.hash_content/1` is the SHA-256 → 64-char lowercase hex helper. Worker computes hash on `"#{ad.name} | #{creative.name}"` (creative.name not body — body lives in jsonb and isn't readily projected). For findings: `"#{title}\\n\\n#{body}"`. Worker compares against `Embeddings.list_ref_id_hashes/1` and skips unchanged rows. Service.embed/1 isn't called when no candidates remain.
+- [x] [W8D4-T3] 13 help docs in [priv/embeddings/help/](priv/embeddings/help/) covering CTR, findings, fatigue, budget leak, CPA, frequency, quality ranking, learning phase, conversions, severity, acknowledge/resolve, CPM, honeymoon. Mix task `mix ad_butler.seed_help_docs` reads each .md, computes hash, calls `Embeddings.Service.embed/1` with the list, and upserts under `kind: "doc_chunk"`. `ref_id` is deterministic (`SHA-256("doc_chunk:" <> filename) → first 16 bytes → UUID`) so reruns upsert the same row.
+- [x] [W8D4-T4] 6 worker tests: clean-DB backfill (1 ad + 1 finding, 2 service.embed calls), idempotent second run (zero service calls when hashes match), only-changed re-embed (ad1 mutated, ad2 unchanged → exactly one text in the embed batch), rate_limit error preserves stale hash for retry, vector-count mismatch returns `:vector_count_mismatch`, Oban unique within 25 min.
 
 #### Day 5 — Verify Fatigue + Embeddings, Pre-Chat Catch-up
 
-- [ ] [W8D5-T1] End-to-end smoke: seed an ad with declining CTR over 14 days, run nightly fit + predictor, assert predictive finding emitted and embedding row created for the ad.
-- [ ] [W8D5-T2] Run `mix precommit`. Open a PR, get a clean review on heuristic + predictive + embeddings before chat work begins.
-- [ ] [W8D5-T3] **Spike day**: throw-away "pause ad via Jido" in `iex` — no UI, no persistence — to de-risk Jido learning curve per roadmap mitigation. Drop the spike at end of day; lessons go into [scratchpad.md](.claude/plans/v0.3-creative-fatigue-chat-mvp/scratchpad.md).
+- [x] [W8D5-T1] [test/ad_butler/integration/week8_e2e_smoke_test.exs](test/ad_butler/integration/week8_e2e_smoke_test.exs) — declining 14-day ad → CreativeFatiguePredictorWorker.perform → predicted_fatigue + frequency_ctr_decay both fire (score 60) → finding with `evidence.predicted == true` + iso8601 `forecast_window_end`. Then EmbeddingsRefreshWorker.perform → ad embedding + finding embedding rows confirmed.
+- [x] [W8D5-T2] All precommit pieces green: compile (warnings-as-errors), deps.unlock --unused (no unused), format, check.unsafe_callers, full mix test (438/438 passing), mix credo --strict (clean across 141 source files). `mix precommit` itself fails at `hex.audit` (pre-existing missing task). PR creation deferred — see HANDOFF.
+- [ ] [W8D5-T3] **Spike day deferred** — exploratory iex session, see [scratchpad.md](.claude/plans/v0.3-creative-fatigue-chat-mvp/scratchpad.md) HANDOFF for next steps. Throwaway code with no persistence is best done by the developer interactively.
 
 ---
 
