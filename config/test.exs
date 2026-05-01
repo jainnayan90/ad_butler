@@ -54,6 +54,8 @@ config :ad_butler, :rabbitmq, url: "amqp://guest:guest@localhost:5672"
 
 config :ad_butler, :messaging_publisher, AdButler.Messaging.PublisherMock
 
+config :ad_butler, :embeddings_service, AdButler.Embeddings.ServiceMock
+
 config :ad_butler, :broadway_producer, :test
 
 config :ad_butler, Oban, testing: :manual

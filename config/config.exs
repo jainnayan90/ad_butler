@@ -13,6 +13,11 @@ config :ad_butler,
   trusted_proxy: false,
   env: config_env()
 
+# Use the generated `Postgrex.Types` module so the `vector` type round-trips
+# correctly. `lib/ad_butler/postgrex_types.ex` defines the module via
+# `Postgrex.Types.define/3` with `Pgvector.extensions()` registered.
+config :ad_butler, AdButler.Repo, types: AdButler.PostgrexTypes
+
 # Per D0003 (claude default) and D0006 (jido/jido_ai/req_llm pins). Swap a model is a
 # config edit, never a code change. Provider:model strings are the ReqLLM model spec.
 config :ad_butler, :llm_models,
@@ -130,7 +135,9 @@ config :logger, :default_formatter,
     :period,
     :inserted,
     :expected,
-    :ads_with_signals
+    :ads_with_signals,
+    :ref_id,
+    :vectors_received
   ]
 
 # Use Jason for JSON parsing in Phoenix
@@ -148,14 +155,17 @@ config :phoenix, :filter_parameters, [
   "encryption_salt",
   "email",
   "smtp_password",
-  "smtp_username"
+  "smtp_username",
+  "api_key",
+  "openai_api_key",
+  "anthropic_api_key"
 ]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 # Total worker concurrency = default(10) + sync(20) + analytics(5) + audit(5) +
-# fatigue_audit(5) + notifications(5) = 50. fatigue_audit + audit + sync run
-# concurrently — set POOL_SIZE >= 60 in prod for headroom over web + cron + LiveView.
+# fatigue_audit(5) + notifications(5) + embeddings(3) = 53. All run concurrently —
+# set POOL_SIZE >= 65 in prod for headroom over web + cron + LiveView.
 config :ad_butler, Oban,
   repo: AdButler.Repo,
   queues: [
@@ -164,7 +174,8 @@ config :ad_butler, Oban,
     analytics: 5,
     audit: 5,
     fatigue_audit: 5,
-    notifications: 5
+    notifications: 5,
+    embeddings: 3
   ],
   plugins: [
     {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
@@ -179,6 +190,8 @@ config :ad_butler, Oban,
        {"*/30 * * * *", AdButler.Workers.InsightsSchedulerWorker},
        {"0 */2 * * *", AdButler.Workers.InsightsConversionWorker},
        {"3 */6 * * *", AdButler.Workers.AuditSchedulerWorker},
+       {"0 3 * * *", AdButler.Workers.FatigueNightlyRefitWorker},
+       {"*/30 * * * *", AdButler.Workers.EmbeddingsRefreshWorker},
        {"0 8 * * 2-7", AdButler.Workers.DigestSchedulerWorker, args: %{"period" => "daily"}},
        {"0 8 * * 1", AdButler.Workers.DigestSchedulerWorker, args: %{"period" => "weekly"}}
      ]}

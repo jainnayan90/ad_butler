@@ -53,6 +53,15 @@ defmodule AdButler.Analytics do
     {items, total}
   end
 
+  @doc "Returns all `Finding.id` values owned by `user` (via the `AdAccount` → `MetaConnection` chain)."
+  @spec list_finding_ids_for_user(User.t()) :: [binary()]
+  def list_finding_ids_for_user(%User{} = user) do
+    Finding
+    |> scope_findings(user)
+    |> select([f], f.id)
+    |> Repo.all()
+  end
+
   @doc "Returns the finding with `id` scoped to `user`. Raises `Ecto.NoResultsError` if not found or not owned."
   @spec get_finding!(User.t(), binary()) :: Finding.t()
   def get_finding!(%User{} = user, id) do
@@ -139,6 +148,19 @@ defmodule AdButler.Analytics do
     )
   end
 
+  @doc """
+  UNSAFE — returns every finding row's `id`, `title`, and `body`. No tenant
+  scope. Used by the cross-tenant `EmbeddingsRefreshWorker` to compute source
+  text for each finding. Internal worker use only — never expose to
+  user-facing surfaces.
+  """
+  @spec unsafe_list_all_findings_for_embedding() :: [
+          %{id: binary(), title: String.t(), body: String.t() | nil}
+        ]
+  def unsafe_list_all_findings_for_embedding do
+    Repo.all(from f in Finding, select: %{id: f.id, title: f.title, body: f.body})
+  end
+
   @doc "Returns a MapSet of {ad_id, kind} tuples for all open (unresolved) findings for the given ad_ids. INTERNAL — not tenant-scoped, worker-only. Never call from user-facing code."
   @spec unsafe_list_open_finding_keys([binary()]) :: MapSet.t()
   def unsafe_list_open_finding_keys([]), do: MapSet.new()
@@ -195,6 +217,12 @@ defmodule AdButler.Analytics do
   Bulk-upserts fatigue scores. Mirrors `bulk_insert_health_scores/1` but only
   touches the fatigue columns on conflict so a parallel `BudgetLeakAuditorWorker`
   write at the same `computed_at` bucket is preserved.
+
+  **`:metadata` is replaced unconditionally** on conflict (it is in the
+  `on_conflict` replace list). Callers must always set `:metadata` on every
+  entry — leaving it `nil` clears any cached value (e.g. the honeymoon baseline
+  read by `get_ad_honeymoon_baseline/1`). When no metadata is being added, pass
+  `%{}` to preserve the dict shape and let the next caller populate it.
   """
   @spec bulk_insert_fatigue_scores([map()]) :: :ok
   def bulk_insert_fatigue_scores([]), do: :ok
@@ -204,7 +232,7 @@ defmodule AdButler.Analytics do
       Repo.insert_all(
         AdHealthScore,
         entries,
-        on_conflict: {:replace, [:fatigue_score, :fatigue_factors, :inserted_at]},
+        on_conflict: {:replace, [:fatigue_score, :fatigue_factors, :metadata, :inserted_at]},
         conflict_target: [:ad_id, :computed_at]
       )
 
@@ -236,6 +264,442 @@ defmodule AdButler.Analytics do
   # ---------------------------------------------------------------------------
   # Creative fatigue helpers — internal (no scope, called by predictor worker)
   # ---------------------------------------------------------------------------
+
+  @honeymoon_min_impressions 1000
+  @honeymoon_window_days 3
+
+  @doc """
+  Returns `%{ad_id => [insights_daily_row]}` for the given ad_ids over the
+  last `window_days` days (rows where `impressions > 0`, ordered ascending by
+  `date_start`). Single bulk query — group in Elixir to collapse the per-ad
+  N+1 in the predictor worker.
+
+  **UNSAFE — no tenant scope.** Callers must scope `ad_ids` upstream
+  (e.g. via `Ads.unsafe_list_ad_ids_for_account/1`).
+  """
+  @spec unsafe_list_insights_window_for_ads([binary()], pos_integer()) ::
+          %{binary() => [map()]}
+  def unsafe_list_insights_window_for_ads([], _window_days), do: %{}
+
+  def unsafe_list_insights_window_for_ads(ad_ids, window_days)
+      when is_list(ad_ids) and is_integer(window_days) and window_days > 0 do
+    cutoff = Date.add(Date.utc_today(), -(window_days - 1))
+
+    rows =
+      Repo.all(
+        from i in "insights_daily",
+          where:
+            i.ad_id in type(^ad_ids, {:array, :binary_id}) and i.date_start >= ^cutoff and
+              i.impressions > 0,
+          order_by: [asc: i.date_start],
+          select: %{
+            ad_id: i.ad_id,
+            date_start: i.date_start,
+            impressions: i.impressions,
+            clicks: i.clicks,
+            reach_count: i.reach_count,
+            frequency: i.frequency
+          }
+      )
+
+    Enum.group_by(rows, &cast_uuid(&1.ad_id), &Map.delete(&1, :ad_id))
+  end
+
+  defp cast_uuid(<<_::binary-size(16)>> = bin), do: Ecto.UUID.cast!(bin)
+  defp cast_uuid(uuid) when is_binary(uuid), do: uuid
+
+  @doc """
+  Returns the honeymoon CTR baseline for `ad_id` — the average CTR over the
+  first `#{@honeymoon_window_days}` days the ad accumulated more than
+  `#{@honeymoon_min_impressions}` impressions.
+
+  Read-only. Cache lookup runs first against the latest `AdHealthScore`'s
+  `metadata["honeymoon_baseline"]`; on miss, computes from `insights_daily`
+  and returns the freshly-computed value. The caller persists the cache by
+  including `:metadata` in the next `bulk_insert_fatigue_scores/1` entry —
+  this keeps the function pure and avoids a write fan-out.
+
+  Returns `{:error, :insufficient_data}` when fewer than
+  `#{@honeymoon_window_days}` qualifying days exist.
+
+  Baseline CTR is `SUM(clicks) / SUM(impressions)` across the window — this
+  weights the average by impressions rather than treating each day equally,
+  matching how downstream predictive checks compare projected CTR.
+  """
+  @spec get_ad_honeymoon_baseline(binary()) ::
+          {:ok, %{baseline_ctr: float(), window_dates: [Date.t()]}}
+          | {:error, :insufficient_data}
+  def get_ad_honeymoon_baseline(ad_id) do
+    case cached_honeymoon_baseline(ad_id) do
+      {:ok, _} = ok -> ok
+      :miss -> compute_honeymoon_baseline(ad_id)
+    end
+  end
+
+  @doc """
+  Same as `get_ad_honeymoon_baseline/1` but consults the cache first and falls
+  back to deriving the baseline from a pre-fetched list of `insights_daily`
+  rows (the slice provided by `unsafe_list_insights_window_for_ads/2`) instead
+  of running its own query.
+
+  **Caller invariant:** `rows` must be the slice for `ad_id` only — the cache
+  read is keyed by `ad_id` but the row-based fallback does not re-check ad
+  ownership. Pass mismatched rows and the baseline reflects the wrong ad.
+
+  Cache hit always wins. On miss, returns `{:error, :insufficient_data}` if the
+  pre-fetched slice doesn't contain enough qualifying days — the predictor
+  worker silently degrades for that ad until the cache is populated by a
+  subsequent run that picks up the baseline from a wider DB query.
+  """
+  @spec get_ad_honeymoon_baseline(binary(), [map()]) ::
+          {:ok, %{baseline_ctr: float(), window_dates: [Date.t()]}}
+          | {:error, :insufficient_data}
+  def get_ad_honeymoon_baseline(ad_id, rows) when is_list(rows) do
+    case cached_honeymoon_baseline(ad_id) do
+      {:ok, _} = ok -> ok
+      :miss -> compute_honeymoon_baseline_from_rows(rows)
+    end
+  end
+
+  defp compute_honeymoon_baseline_from_rows(rows) do
+    qualifying =
+      rows
+      |> Enum.filter(fn r -> r.impressions > @honeymoon_min_impressions end)
+      |> Enum.sort_by(& &1.date_start, Date)
+      |> Enum.take(@honeymoon_window_days)
+
+    if Enum.count(qualifying) < @honeymoon_window_days do
+      {:error, :insufficient_data}
+    else
+      total_impressions = Enum.sum_by(qualifying, & &1.impressions)
+      total_clicks = Enum.sum_by(qualifying, & &1.clicks)
+
+      {:ok,
+       %{
+         baseline_ctr: Float.round(total_clicks / total_impressions, 6),
+         window_dates: Enum.map(qualifying, & &1.date_start)
+       }}
+    end
+  end
+
+  defp cached_honeymoon_baseline(ad_id) do
+    with %AdHealthScore{metadata: %{"honeymoon_baseline" => cached}} <-
+           unsafe_get_latest_health_score(ad_id),
+         %{"baseline_ctr" => ctr, "window_dates" => dates}
+         when is_number(ctr) and is_list(dates) <- cached,
+         {:ok, parsed_dates} <- parse_window_dates(dates) do
+      # Force float — JSON-decoded numbers may be integer when the cached value
+      # rounds to a whole number. Downstream comparisons assume float CTR.
+      {:ok, %{baseline_ctr: ctr * 1.0, window_dates: parsed_dates}}
+    else
+      _ -> :miss
+    end
+  end
+
+  defp parse_window_dates(dates) do
+    Enum.reduce_while(dates, {:ok, []}, fn d, {:ok, acc} ->
+      case Date.from_iso8601(d) do
+        {:ok, date} -> {:cont, {:ok, [date | acc]}}
+        _ -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      :error -> :error
+    end
+  end
+
+  @regression_window_days 14
+  @regression_min_days 10
+
+  @doc """
+  Fits a multiple linear regression of daily CTR on three features over the
+  last #{@regression_window_days} days for `ad_id`:
+
+      CTR ~ β₀ + β_day · day_index + β_freq · frequency + β_reach · cumulative_reach
+
+  - `day_index` runs 0..N-1 across the observed days (0 = oldest).
+  - `frequency` is the per-day Meta-reported frequency; `nil`/`0` rows count as `0.0`.
+  - `cumulative_reach` is `SUM(reach_count) OVER (ORDER BY date_start)` within the
+    14-day window. `insights_daily` has no native cumulative_reach column.
+
+  Days with zero impressions are dropped (CTR undefined). Returns
+  `{:error, :insufficient_data}` when fewer than #{@regression_min_days} usable
+  days remain, or when the 4×4 normal equations are singular (collinear features —
+  e.g. flat frequency + cumulative_reach == reach_count × day_index).
+
+  `projected_ctr_3d` extrapolates `day_index` forward 3 days and projects
+  `frequency` and `cumulative_reach` via their own per-feature OLS slopes; this
+  keeps the prediction internally consistent rather than holding the latest
+  observed values constant.
+
+  `slope_per_day` is the `β_day` coefficient. `r_squared` is clamped to `[0, 1]`.
+  Coefficients are solved via Gauss-Jordan elimination with partial pivoting on
+  the 4×5 augmented matrix `[XᵀX | Xᵀy]` — the fixed 4-feature dimension makes
+  a manual solver simpler than pulling in a numerics dep.
+  """
+  @spec fit_ctr_regression(binary()) ::
+          {:ok,
+           %{
+             slope_per_day: float(),
+             intercept: float(),
+             projected_ctr_3d: float(),
+             r_squared: float()
+           }}
+          | {:error, :insufficient_data}
+  def fit_ctr_regression(ad_id) do
+    fit_ctr_regression(ad_id, fetch_regression_rows(ad_id))
+  end
+
+  @doc """
+  Same as `fit_ctr_regression/1` but fits over a pre-fetched list of
+  `insights_daily` rows (filter `impressions > 0`, ordered ascending by
+  `date_start`). Used by the predictor worker to collapse the per-ad N+1
+  on the 14-day window into a single bulk fetch.
+
+  **Caller invariant:** `rows` must be the slice for `ad_id` and nothing
+  else — this function does not re-scope. Mixing rows from multiple ads
+  fits the regression to wrong data with no error. The standard caller is
+  `unsafe_list_insights_window_for_ads/2 |> Map.get(ad_id, [])`.
+  """
+  @spec fit_ctr_regression(binary(), [map()]) ::
+          {:ok,
+           %{
+             slope_per_day: float(),
+             intercept: float(),
+             projected_ctr_3d: float(),
+             r_squared: float()
+           }}
+          | {:error, :insufficient_data}
+  def fit_ctr_regression(_ad_id, rows) when is_list(rows) do
+    if Enum.count(rows) < @regression_min_days do
+      {:error, :insufficient_data}
+    else
+      do_fit_regression(rows)
+    end
+  end
+
+  defp fetch_regression_rows(ad_id) do
+    cutoff = Date.add(Date.utc_today(), -(@regression_window_days - 1))
+
+    Repo.all(
+      from i in "insights_daily",
+        where:
+          i.ad_id == type(^ad_id, :binary_id) and i.date_start >= ^cutoff and
+            i.impressions > 0,
+        order_by: [asc: i.date_start],
+        select: %{
+          date_start: i.date_start,
+          impressions: i.impressions,
+          clicks: i.clicks,
+          reach_count: i.reach_count,
+          frequency: i.frequency
+        }
+    )
+  end
+
+  defp do_fit_regression(rows) do
+    n = length(rows)
+    ctrs = Enum.map(rows, fn r -> r.clicks / r.impressions end)
+    freqs = Enum.map(rows, &row_frequency/1)
+    cumulative_reach = rows |> Enum.map(& &1.reach_count) |> running_sum()
+    day_indices = Enum.map(0..(n - 1), &(&1 * 1.0))
+
+    x_rows =
+      Enum.zip([day_indices, freqs, cumulative_reach])
+      |> Enum.map(fn {d, f, r} -> [1.0, d, f, r] end)
+
+    case solve_normal_equations(x_rows, ctrs) do
+      {:ok, [beta0, beta_day, beta_freq, beta_reach] = betas} ->
+        preds = Enum.map(x_rows, &dot(&1, betas))
+        mean_y = Enum.sum(ctrs) / n
+        ss_tot = Enum.reduce(ctrs, 0.0, fn y, acc -> acc + :math.pow(y - mean_y, 2) end)
+
+        ss_res =
+          Enum.zip_reduce(ctrs, preds, 0.0, fn y, p, acc -> acc + :math.pow(y - p, 2) end)
+
+        r_squared = if ss_tot == 0.0, do: 0.0, else: 1.0 - ss_res / ss_tot
+
+        freq_proj = extrapolate_forward(day_indices, freqs, 3)
+        reach_proj = extrapolate_forward(day_indices, cumulative_reach, 3)
+        day_proj = n - 1 + 3
+        projected = beta0 + beta_day * day_proj + beta_freq * freq_proj + beta_reach * reach_proj
+
+        {:ok,
+         %{
+           slope_per_day: Float.round(beta_day, 8),
+           intercept: Float.round(beta0, 8),
+           projected_ctr_3d: Float.round(projected, 8),
+           r_squared: Float.round(clamp(r_squared, 0.0, 1.0), 6)
+         }}
+
+      {:error, :singular} ->
+        # Highly collinear features (e.g. flat frequency + cumulative_reach
+        # perfectly proportional to day_index). Treat as insufficient — the
+        # caller's r² gate would have rejected the fit anyway.
+        {:error, :insufficient_data}
+    end
+  end
+
+  defp row_frequency(%{frequency: nil}), do: 0.0
+  defp row_frequency(%{frequency: %Decimal{} = d}), do: Decimal.to_float(d)
+  defp row_frequency(%{frequency: f}) when is_number(f), do: f * 1.0
+
+  defp running_sum(values) do
+    {acc, _} =
+      Enum.map_reduce(values, 0, fn v, sum ->
+        new_sum = sum + v
+        {new_sum * 1.0, new_sum}
+      end)
+
+    acc
+  end
+
+  defp dot(a, b), do: Enum.zip_reduce(a, b, 0.0, fn x, y, acc -> acc + x * y end)
+
+  defp clamp(x, lo, _hi) when x < lo, do: lo
+  defp clamp(x, _lo, hi) when x > hi, do: hi
+  defp clamp(x, _lo, _hi), do: x
+
+  # Per-feature OLS extrapolation: project value at x = (n-1) + offset.
+  defp extrapolate_forward(xs, ys, offset) do
+    n = length(xs)
+
+    cond do
+      n == 0 ->
+        0.0
+
+      n == 1 ->
+        List.first(ys) * 1.0
+
+      true ->
+        x_mean = Enum.sum(xs) / n
+        y_mean = Enum.sum(ys) / n
+
+        num =
+          Enum.zip_reduce(xs, ys, 0.0, fn x, y, acc -> acc + (x - x_mean) * (y - y_mean) end)
+
+        den = Enum.reduce(xs, 0.0, fn x, acc -> acc + :math.pow(x - x_mean, 2) end)
+        slope = if den == 0.0, do: 0.0, else: num / den
+        intercept = y_mean - slope * x_mean
+        slope * (n - 1 + offset) + intercept
+    end
+  end
+
+  # XᵀX β = Xᵀy solved via Gauss-Jordan on the 4×5 augmented matrix.
+  defp solve_normal_equations(x_rows, ys) do
+    k = 4
+    xtx = build_xtx(x_rows, k)
+    xty = build_xty(x_rows, ys, k)
+
+    augmented =
+      xtx
+      |> Enum.zip(xty)
+      |> Enum.map(fn {row, b} -> row ++ [b] end)
+
+    case gauss_jordan(augmented, k) do
+      {:ok, reduced} -> {:ok, Enum.map(reduced, &List.last/1)}
+      err -> err
+    end
+  end
+
+  defp build_xtx(x_rows, k) do
+    for i <- 0..(k - 1), do: Enum.map(0..(k - 1), &xtx_cell(x_rows, i, &1))
+  end
+
+  defp xtx_cell(x_rows, i, j) do
+    Enum.reduce(x_rows, 0.0, fn row, acc -> acc + Enum.at(row, i) * Enum.at(row, j) end)
+  end
+
+  defp build_xty(x_rows, ys, k) do
+    for i <- 0..(k - 1), do: xty_cell(x_rows, ys, i)
+  end
+
+  defp xty_cell(x_rows, ys, i) do
+    Enum.zip_reduce(x_rows, ys, 0.0, fn row, y, acc -> acc + Enum.at(row, i) * y end)
+  end
+
+  defp gauss_jordan(matrix, k) do
+    Enum.reduce_while(0..(k - 1), {:ok, matrix}, &eliminate_column/2)
+  end
+
+  defp eliminate_column(col, {:ok, m}) do
+    {pivot_idx, pivot_abs} = find_pivot(m, col)
+
+    if pivot_abs < 1.0e-12 do
+      {:halt, {:error, :singular}}
+    else
+      {:cont, {:ok, do_eliminate(m, col, pivot_idx)}}
+    end
+  end
+
+  defp find_pivot(m, col) do
+    m
+    |> Enum.with_index()
+    |> Enum.drop(col)
+    |> Enum.map(fn {row, idx} -> {idx, abs(Enum.at(row, col))} end)
+    |> Enum.max_by(&elem(&1, 1))
+  end
+
+  defp do_eliminate(m, col, pivot_idx) do
+    swapped = swap_rows(m, col, pivot_idx)
+    pivot_row = Enum.at(swapped, col)
+    pivot_val = Enum.at(pivot_row, col)
+    norm = Enum.map(pivot_row, &(&1 / pivot_val))
+
+    swapped
+    |> List.replace_at(col, norm)
+    |> Enum.with_index()
+    |> Enum.map(fn {row, idx} -> reduce_row(row, idx, col, norm) end)
+  end
+
+  defp reduce_row(row, idx, idx, _norm), do: row
+
+  defp reduce_row(row, _idx, col, norm) do
+    factor = Enum.at(row, col)
+    Enum.zip_with(row, norm, fn a, b -> a - factor * b end)
+  end
+
+  defp swap_rows(m, i, i), do: m
+
+  defp swap_rows(m, i, j) do
+    ri = Enum.at(m, i)
+    rj = Enum.at(m, j)
+
+    m
+    |> List.replace_at(i, rj)
+    |> List.replace_at(j, ri)
+  end
+
+  defp compute_honeymoon_baseline(ad_id) do
+    rows =
+      Repo.all(
+        from i in "insights_daily",
+          where:
+            i.ad_id == type(^ad_id, :binary_id) and
+              i.impressions > ^@honeymoon_min_impressions,
+          order_by: [asc: i.date_start],
+          limit: ^@honeymoon_window_days,
+          select: %{
+            date_start: i.date_start,
+            impressions: i.impressions,
+            clicks: i.clicks
+          }
+      )
+
+    if Enum.count(rows) < @honeymoon_window_days do
+      {:error, :insufficient_data}
+    else
+      total_impressions = Enum.sum_by(rows, & &1.impressions)
+      total_clicks = Enum.sum_by(rows, & &1.clicks)
+
+      {:ok,
+       %{
+         baseline_ctr: Float.round(total_clicks / total_impressions, 6),
+         window_dates: Enum.map(rows, & &1.date_start)
+       }}
+    end
+  end
 
   @doc """
   Fits a simple linear regression on daily CTR for `ad_id` over the last
@@ -357,8 +821,8 @@ defmodule AdButler.Analytics do
   end
 
   defp avg_cpm(rows) do
-    total_spend = Enum.sum(Enum.map(rows, & &1.spend_cents))
-    total_impressions = Enum.sum(Enum.map(rows, & &1.impressions))
+    total_spend = Enum.sum_by(rows, & &1.spend_cents)
+    total_impressions = Enum.sum_by(rows, & &1.impressions)
 
     cond do
       total_impressions == 0 -> {:error, :insufficient}

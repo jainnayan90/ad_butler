@@ -1,79 +1,54 @@
-# Test Review — Week 7 Creative Fatigue
+# Week 8 Testing Review
 
-⚠️ EXTRACTED FROM AGENT MESSAGE (write tool unavailable in agent env)
+⚠️ EXTRACTED FROM AGENT MESSAGE (Write was denied for the agent)
 
-## Summary
-
-Five files reviewed. Oban patterns, tenant isolation, and LiveView testing are largely sound. Two blockers, six warnings, four suggestions.
+**Severity counts: 3 BLOCKERS, 5 WARNINGS, 3 SUGGESTIONS**
 
 ---
 
-## BLOCKER
+## BLOCKERS
 
-### BLOCKER-1 — `Application.put_env` in kill-switch test is not fully serialized
-`test/ad_butler/workers/audit_scheduler_worker_test.exs:40-41`
+### B1 — `analytics_test.exs` DDL under `async: true`
+`test/ad_butler/analytics_test.exs:316, 375, 434, 486, 626`
 
-The kill-switch test writes `Application.put_env(:ad_butler, :fatigue_enabled, false)` with `on_exit` cleanup. `AuditSchedulerWorkerTest` is `async: false`, so it won't race itself — but if any other module running concurrently reads `:fatigue_enabled` during that window, it sees a corrupted value. The assumption that no other `async: true` module reads this key is silent and fragile.
+Five `describe` blocks call `create_insights_partition` in `setup`. DDL takes `AccessExclusiveLock`, commits immediately, bypasses sandbox rollback, and races against parallel async processes.
 
-**Fix:** Gate the kill-switch through a behaviour + mock (project-standard pattern), or at minimum add a comment that states this test requires global env ownership and must remain `async: false` across the whole suite.
+**Note:** PERSISTENT from Week 7 (existing `compute_ctr_slope/get_7d_frequency/get_cpm_change_pct` describes already had this). Week 8 added 2 more (honeymoon baseline + fit_ctr_regression) compounding the surface.
 
-### BLOCKER-2 — `analytics_test.exs` is `async: true` and calls `create_insights_partition` for the same calendar-week boundaries as the `async: false` worker tests
-`test/ad_butler/analytics_test.exs:337-340, 396, 455-456` and `test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs:69, 213-214, 279-280`
+**Fix:** Extract these describes into a separate file with `async: false` (same pattern as `creative_fatigue_predictor_worker_test.exs`).
 
-`create_insights_partition` is presumably `CREATE TABLE IF NOT EXISTS` (DDL, non-transactional in Postgres). If it is not idempotent against concurrent callers, two async test processes hitting it simultaneously will race. Confirm the SQL function body uses `IF NOT EXISTS` and add a comment in both setup blocks asserting that assumption.
+### B2 — `week8_e2e_smoke_test.exs` missing `@moduletag :integration`
+`test/ad_butler/integration/week8_e2e_smoke_test.exs`
 
----
+Project convention: integration tests carry `@moduletag :integration` so `test_helper.exs` can exclude them. Without the tag, the smoke test runs on every `mix test`.
 
-## Warnings
+**Fix:** Add `@moduletag :integration` or move to a non-integration directory.
 
-### WARNING-1 — `insert_daily/3` duplicated across two files with schema divergence
-`test/ad_butler/analytics_test.exs:11` vs `test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs:74`
+### B3 — No tenant-isolation test for `EmbeddingsRefreshWorker`
+CLAUDE.md: "Tenant isolation tests are non-negotiable." The worker is intentionally cross-tenant (processes all ads), but that design decision is untested and undocumented.
 
-The analytics version includes `cpm_cents` and full `reach_count` from attrs; the worker version hard-codes `reach_count: 0` and omits `cpm_cents`. Extract into `test/support/insights_helpers.ex` with a single canonical implementation.
-
-### WARNING-2 — `heuristic_cpm_saturation` test uses two-step insert+update_all
-`test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs:228-254`
-
-Two-step seed/update pattern is harder to read than passing `spend_cents` directly to `insert_daily`. The helper already accepts `spend_cents`; use it directly.
-
-### WARNING-3 — `audit_scheduler_worker_test.exs` smoke test uses inline `Repo.insert_all`
-`test/ad_butler/workers/audit_scheduler_worker_test.exs:110-125`
-
-A third copy of the partition insert pattern, omits `frequency`. Consolidate on the helper.
-
-### WARNING-4 — Tenant isolation only tested at integration layer, not heuristic-function layer
-`test/ad_butler/workers/creative_fatigue_predictor_worker_test.exs:463-498`
-
-The scaffold contract test passes because account A has no ads — so account B's data is never queried. Passes by absence, not by genuine scoping. Add a test where account A *does* have ads, account B has separate ads with triggering signals, and running for account A never emits findings for account B's ads.
-
-### WARNING-5 — Filter test asserts on UI copy
-`test/ad_butler_web/live/findings_live_test.exs:122`
-
-Asserts `html =~ "Creative Fatigue"`. Prefer asserting on a data attribute or the `kind` field value.
-
-### WARNING-6 — Detail render test asserts exact template strings
-`test/ad_butler_web/live/finding_detail_live_test.exs:131-133`
-
-Asserts on `"frequency 4.5"` and `"above_average → average"`. Loosen for resilience to copy changes.
+**Fix:** Add a two-tenant test that inserts ads under two `meta_connection` owners, runs the worker, and asserts embeddings exist for both — proving cross-tenant processing is deliberate.
 
 ---
 
-## Suggestions
+## WARNINGS
 
-### SUGGESTION-1 — Partition setup blocks repeated per describe block
-`creative_fatigue_predictor_worker_test.exs:68-70, 212-215, 278-281`
+**W1** — Idempotency test hard-codes `"#{ad.name} | "` as the hash content (`embeddings_refresh_worker_test.exs:71`). If the worker adds any field to the content string the hash diverges silently and the test degrades into a first-run test without failing loudly.
 
-A single `setup_all` block at module level would create the partitions once; DDL is not rolled back by the sandbox transaction anyway.
+**W2** — `get_7d_frequency` asserts `== 4.0` float equality (`analytics_test.exs:394, 408`). Use `assert_in_delta`. (PERSISTENT from Week 7.)
 
-### SUGGESTION-2 — Factory chain repeated 10+ times
-Extract into a named private helper `defp create_scoped_ad/1` called from a shared `setup` block in each describe.
+**W3** — `nearest/3` limit test only asserts `length == 2`; which 2 rows are returned is unverified (`embeddings_test.exs:167`).
 
-### SUGGESTION-3 — `heuristic_frequency_ctr_decay` "fires" test seeds, deletes, then re-seeds
-`creative_fatigue_predictor_worker_test.exs:102-114`
+**W4** — Two `expect` calls in the "first run" embeddings worker test assume ads-before-findings batch ordering (`embeddings_refresh_worker_test.exs:39–49`).
 
-The first seed pass is unused. Remove it; seed the declining CTR data once.
+**W5** — `fit_ctr_regression` declining-series test asserts `slope < 0.0` with no lower bound (`analytics_test.exs:673`). A slope of `-1e-10` satisfies the condition. Tighten to `< -0.001`.
 
-### SUGGESTION-4 — Misleading describe heading
-`analytics_test.exs:334`
+---
 
-Reads `"compute_ctr_slope/2 / get_7d_frequency/1"` but only contains `compute_ctr_slope` tests. Rename to `"compute_ctr_slope/2"`.
+## SUGGESTIONS
+
+**S1** — `describe "compute_ctr_slope/2 / get_7d_frequency/1"` heading is misleading. Rename to `"compute_ctr_slope/2"`. (PERSISTENT.)
+
+**S2** — `heuristic_frequency_ctr_decay` "fires" test seeds then immediately deletes and re-seeds (`creative_fatigue_predictor_worker_test.exs:83–95`). (PERSISTENT.)
+
+**S3** — `test/ad_butler/integration/` is a new subdirectory not consistent with `test/integration/` (existing). Consolidate or document.
