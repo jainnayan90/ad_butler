@@ -70,8 +70,14 @@ defmodule AdButler.Chat.Message do
   value is a list — anything else returns a changeset with a
   `"must be a list"` error on `:tool_results`.
 
-  Used by `Chat.unsafe_update_message_tool_results/2`. Future validation
-  on the JSONB shape goes here so every write path picks it up.
+  Used by the parent context's unsafe `tool_results` writer. Future
+  validation on the JSONB shape goes here so every write path picks
+  it up.
+
+  > **Caller contract** — the error-clause changeset is for inspection
+  > via `Ecto.Changeset.traverse_errors/2` (or the project's
+  > `errors_on/1`) only; never pass it to `Repo.update/1`. It carries
+  > no dirty fields and would emit an empty `SET` clause.
   """
   @spec tool_results_changeset(t(), term()) :: Ecto.Changeset.t()
   def tool_results_changeset(%__MODULE__{} = message, tool_results) when is_list(tool_results) do

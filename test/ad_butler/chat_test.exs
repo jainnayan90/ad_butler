@@ -460,7 +460,7 @@ defmodule AdButler.ChatTest do
   end
 
   # ---------------------------------------------------------------------------
-  # get_message!/1
+  # get_message!/2
   # ---------------------------------------------------------------------------
 
   describe "get_message!/2" do
@@ -503,10 +503,18 @@ defmodule AdButler.ChatTest do
         Chat.get_message!(user.id, "00000000-0000-0000-0000-000000000000")
       end
     end
+
+    test "raises Ecto.NoResultsError on a malformed UUID (parity with get_session!/2)" do
+      user = insert(:user)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Chat.get_message!(user.id, "not-a-uuid")
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------
-  # update_message_tool_results/2
+  # get_message/2
   # ---------------------------------------------------------------------------
 
   describe "get_message/2" do
@@ -552,6 +560,10 @@ defmodule AdButler.ChatTest do
       assert {:error, :not_found} = Chat.get_message(user.id, "not-a-uuid")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # unsafe_update_message_tool_results/2
+  # ---------------------------------------------------------------------------
 
   describe "unsafe_update_message_tool_results/2" do
     test "writes the JSONB array and returns the updated message" do

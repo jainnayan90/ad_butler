@@ -211,7 +211,9 @@ defmodule AdButler.Chat do
 
   @doc """
   Returns the message with `id` scoped to `user_id`. Raises
-  `Ecto.NoResultsError` on cross-tenant access or a missing row.
+  `Ecto.NoResultsError` on cross-tenant access, a missing row, or a
+  malformed UUID — `Ecto.Query.CastError` is rescued and re-raised as
+  `NoResultsError` to match `get_session!/2`'s contract.
   """
   @spec get_message!(binary(), binary()) :: Message.t()
   def get_message!(user_id, id) when is_binary(user_id) and is_binary(id) do
@@ -219,6 +221,9 @@ defmodule AdButler.Chat do
     |> join(:inner, [m], s in Session, on: s.id == m.chat_session_id)
     |> where([m, s], m.id == ^id and s.user_id == ^user_id)
     |> Repo.one!()
+  rescue
+    Ecto.Query.CastError ->
+      reraise Ecto.NoResultsError, [queryable: Message], __STACKTRACE__
   end
 
   @doc """

@@ -37,8 +37,11 @@ defmodule AdButlerWeb.ChatLive.Show do
       |> assign(:page, 1)
       |> assign(:total_pages, 1)
       # `:any_messages?` flips to `true` when at least one message has been
-      # rendered (history load or `:turn_complete`). The single LV process
-      # serialises `:load` and `:turn_complete` so no race in practice.
+      # rendered. Set false here, then to `total > 0` in `handle_info({:load, _}, _)`,
+      # then to `true` in `handle_info({:turn_complete, _, msg_id}, _)`.
+      # `Chat.subscribe/1` is called inside `{:load, _}` — PubSub
+      # `:turn_complete` cannot arrive before subscribe completes, so the
+      # `:load` flip always precedes any `:turn_complete` flip.
       |> assign(:any_messages?, false)
       |> stream(:messages, [])
 

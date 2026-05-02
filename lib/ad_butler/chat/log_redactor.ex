@@ -18,7 +18,7 @@ defmodule AdButler.Chat.LogRedactor do
   @doc """
   Reduces `reason` to a safe tag.
 
-  * Atoms pass through unchanged (`:timeout`, `:rate_limited`, …).
+  * Atoms pass through unchanged (`:timeout`, `:rate_limited`, `nil`, …).
   * Tagged tuples reduce to their leading atom (`{:dns_error, _}` → `:dns_error`,
     `{:exit, :normal, stack}` → `:exit`).
   * Anything else (maps with body strings, binary error messages,

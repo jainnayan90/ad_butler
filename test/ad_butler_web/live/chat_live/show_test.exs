@@ -232,7 +232,13 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
 
       conn = log_in_user(conn, user)
       {:ok, view, _html} = live(conn, ~p"/chat/#{session.id}")
-      _ = render(view)
+
+      # Wait for `handle_info({:load, id}, ...)` to populate the session
+      # assign before deleting the row — otherwise the delete may race the
+      # :load handler and force a redirect to /chat (which would break the
+      # subsequent form submit). The "All chats" link only renders after
+      # `:session` is non-nil.
+      assert render(view) =~ "All chats"
 
       # Drive `Chat.send_message` into the `{:error, :not_found}` branch by
       # deleting the session row after mount. `ensure_server/2` re-checks
@@ -244,7 +250,8 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
       _ = view |> form("form", %{"body" => "hello"}) |> render_submit()
 
       # render_async waits for the start_async to resolve before re-rendering.
-      html = render_async(view, 500)
+      # 1_000ms matches the W2 crash test for CI consistency.
+      html = render_async(view, 1_000)
 
       assert html =~ "Send failed"
       refute html =~ "Sending…"
