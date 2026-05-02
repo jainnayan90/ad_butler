@@ -35,7 +35,7 @@ defmodule AdButler.LLM.Usage do
     field :cost_cents_total, :integer
     field :latency_ms, :integer
     field :status, :string
-    field :request_id, :string
+    field :request_id, :string, redact: true
     field :metadata, AdButler.Encrypted.Binary
 
     belongs_to :user, User

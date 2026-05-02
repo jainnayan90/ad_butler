@@ -116,4 +116,25 @@ defmodule AdButler.Factory do
       leak_factors: %{}
     }
   end
+
+  @doc """
+  Inserts a chat message at a deterministic `inserted_at` offset from "now".
+  Used in chat tests to order messages without `:timer.sleep/1` — passing
+  `offset_ms: i` for `i <- 1..n` yields strictly increasing timestamps.
+  """
+  def insert_chat_message_at(session_id, role, content, offset_ms)
+      when is_binary(session_id) and is_integer(offset_ms) do
+    inserted_at = DateTime.add(DateTime.utc_now(), offset_ms, :millisecond)
+
+    {:ok, msg} =
+      AdButler.Chat.append_message(%{
+        chat_session_id: session_id,
+        role: role,
+        content: content,
+        inserted_at: inserted_at,
+        status: "complete"
+      })
+
+    msg
+  end
 end

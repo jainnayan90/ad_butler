@@ -12,13 +12,15 @@ defmodule AdButler.Application do
 
   require Logger
 
+  alias AdButler.Chat
   alias AdButler.ErrorHelpers
-  alias AdButler.LLM.UsageHandler
   alias AdButler.Messaging.RabbitMQTopology
 
   @impl true
   @spec start(any(), any()) :: {:error, any()} | {:ok, pid()}
   def start(_type, _args) do
+    assert_req_llm_http1_pool!()
+
     :telemetry.detach("oban-job-lifecycle-logger")
 
     :ok =
@@ -41,7 +43,16 @@ defmodule AdButler.Application do
         AdButler.Meta.RateLimitStore,
         {PlugAttack.Storage.Ets, name: :plug_attack_storage, clean_period: 60_000},
         {Oban, Application.fetch_env!(:ad_butler, Oban)},
-        {Task.Supervisor, name: AdButler.TaskSupervisor}
+        {Task.Supervisor, name: AdButler.TaskSupervisor},
+        # Jido 2.2 instance — owns Jido.Registry, Jido.RuntimeStore, agent
+        # supervisor. Required before any Jido.AgentServer.start_link/1.
+        # See .claude/plans/week9-chat-foundation/scratchpad.md D-W9-01.
+        {Jido, name: Jido},
+        # Per-session chat agent registry + supervisor (Week 9 D2).
+        # Naming: `{:via, Registry, {AdButler.Chat.SessionRegistry, session_id}}`.
+        {Registry, keys: :unique, name: AdButler.Chat.SessionRegistry},
+        {DynamicSupervisor,
+         name: AdButler.Chat.SessionSupervisor, strategy: :one_for_one, max_restarts: 50}
       ] ++
         if env != :test do
           [
@@ -70,7 +81,7 @@ defmodule AdButler.Application do
     opts = [strategy: :one_for_one, name: AdButler.Supervisor]
     result = Supervisor.start_link(children, opts)
 
-    :ok = UsageHandler.attach()
+    :ok = Chat.Telemetry.attach()
 
     result
   end
@@ -138,13 +149,40 @@ defmodule AdButler.Application do
       ) do
     Logger.error("Oban job raised exception",
       kind: kind,
-      reason: inspect(reason),
+      reason: reason,
       worker: job.worker,
       id: job.id
     )
   end
 
   def handle_oban_event(_, _, _, _), do: :ok
+
+  # Finch HTTP/2 silently drops streamed bodies > 64 KB
+  # (https://github.com/sneako/finch/issues/265). ReqLLM streams responses,
+  # so a misconfigured pool would produce truncated tool-call JSON in
+  # production with no error visible to the agent. Boot-time assertion fails
+  # loudly so the next deploy catches a config drift instead of leaking
+  # corrupt assistant turns into chat history.
+  defp assert_req_llm_http1_pool! do
+    pools =
+      :req_llm
+      |> Application.get_env(:finch, [])
+      |> Keyword.get(:pools, %{})
+
+    case Map.get(pools, :default) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :protocols) do
+          [:http1] ->
+            :ok
+
+          other ->
+            raise "ReqLLM Finch pool must be configured with protocols: [:http1] (got #{inspect(other)}). HTTP/2 silently truncates streamed bodies > 64KB — see config/config.exs."
+        end
+
+      nil ->
+        raise "ReqLLM Finch :default pool is not configured. Expected protocols: [:http1] — see config/config.exs."
+    end
+  end
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.

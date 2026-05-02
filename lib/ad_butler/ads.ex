@@ -149,6 +149,70 @@ defmodule AdButler.Ads do
     Repo.all(from a in Ad, where: a.ad_account_id in ^aa_ids, select: a.id)
   end
 
+  @doc """
+  Returns the subset of `ad_ids` owned by `user`. Cross-tenant or unknown ids
+  are silently dropped. Used by chat tools that operate on a user-supplied
+  list (`compare_creatives`); the returned list preserves no order guarantee.
+
+  Empty input or all-foreign returns `[]`. Invalid (non-UUID) strings are
+  pre-filtered via `Ecto.UUID.cast/1` so the underlying scoped query never
+  sees a malformed id — defensive against `Ecto.Query.CastError` without a
+  blanket rescue that would also swallow connection errors.
+  """
+  @spec filter_owned_ad_ids(Accounts.User.t(), [binary()]) :: [binary()]
+  def filter_owned_ad_ids(%Accounts.User{} = _user, []), do: []
+
+  def filter_owned_ad_ids(%Accounts.User{} = user, ad_ids) when is_list(ad_ids) do
+    user
+    |> fetch_owned_ads_query(ad_ids)
+    |> case do
+      :empty -> []
+      query -> query |> select([a], a.id) |> Repo.all()
+    end
+  end
+
+  @doc """
+  Returns the subset of `ad_ids` owned by `user` as full `Ad.t()` structs in
+  one scoped query. Cross-tenant or invalid ids are silently dropped. Used by
+  chat tools that need the ad's `name` (or other fields) alongside its id —
+  collapses the per-id `fetch_ad/2` loop in `compare_creatives` to a single
+  query (W9 N+1 elimination).
+
+  Empty input or all-foreign returns `[]`. Order is not guaranteed.
+  """
+  @spec fetch_ads(Accounts.User.t(), [binary()]) :: [Ad.t()]
+  def fetch_ads(%Accounts.User{} = _user, []), do: []
+
+  def fetch_ads(%Accounts.User{} = user, ad_ids) when is_list(ad_ids) do
+    user
+    |> fetch_owned_ads_query(ad_ids)
+    |> case do
+      :empty -> []
+      query -> Repo.all(query)
+    end
+  end
+
+  # Shared scoped-and-validated query builder for the two ownership helpers
+  # above. Returns `:empty` when no input ids cast as valid UUIDs (skip the
+  # mc_ids lookup entirely) or when the user has no MetaConnections; returns
+  # an `Ecto.Query` ready for `select` + `Repo.all` otherwise.
+  defp fetch_owned_ads_query(%Accounts.User{} = user, ad_ids) do
+    valid =
+      Enum.flat_map(ad_ids, fn id ->
+        case Ecto.UUID.cast(id) do
+          {:ok, uuid} -> [uuid]
+          :error -> []
+        end
+      end)
+
+    if valid == [] do
+      :empty
+    else
+      mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+      Ad |> scope(mc_ids) |> where([a], a.id in ^valid)
+    end
+  end
+
   @doc "Streams active AdAccounts for internal scheduler use. Must be called inside a transaction."
   @spec stream_active_ad_accounts() :: Enum.t()
   def stream_active_ad_accounts do
@@ -414,6 +478,36 @@ defmodule AdButler.Ads do
     |> Repo.get!(id)
   end
 
+  @doc """
+  Non-raising counterpart to `get_ad_set!/2`. Returns `{:ok, ad_set}` for `id`
+  scoped to `user`, or `{:error, :not_found}` on miss / cross-tenant /
+  invalid UUID. Used by chat tools (`SimulateBudgetChange`).
+  """
+  @spec fetch_ad_set(User.t(), binary()) :: {:ok, AdSet.t()} | {:error, :not_found}
+  def fetch_ad_set(%User{} = user, id) when is_binary(id) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+
+    case AdSet |> scope(mc_ids) |> Repo.get(id) do
+      nil -> {:error, :not_found}
+      ad_set -> {:ok, ad_set}
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
+  end
+
+  @doc """
+  Returns IDs of all ads belonging to `ad_set_id`. Caller is responsible
+  for tenant scoping (used by chat tools after `fetch_ad_set/2`).
+  """
+  @spec list_ad_ids_in_ad_set(binary()) :: [binary()]
+  def list_ad_ids_in_ad_set(ad_set_id) when is_binary(ad_set_id) do
+    Repo.all(
+      from a in Ad,
+        where: a.ad_set_id == ^ad_set_id,
+        select: a.id
+    )
+  end
+
   @doc "Inserts or updates an ad set for `ad_account`, keyed on `(ad_account_id, meta_id)`."
   @spec upsert_ad_set(AdAccount.t(), map()) ::
           {:ok, AdSet.t()} | {:error, Ecto.Changeset.t()}
@@ -519,6 +613,26 @@ defmodule AdButler.Ads do
     Ad
     |> scope(mc_ids)
     |> Repo.get!(id)
+  end
+
+  @doc """
+  Returns `{:ok, ad}` for `id` scoped to `user`, or `{:error, :not_found}`
+  on miss / cross-tenant / invalid UUID.
+
+  Non-raising counterpart to `get_ad!/2` — chat tools call this to avoid
+  leaking ad existence on cross-tenant probes (returning `:not_found`
+  rather than raising). Same scoping (MetaConnection IDs).
+  """
+  @spec fetch_ad(User.t(), binary()) :: {:ok, Ad.t()} | {:error, :not_found}
+  def fetch_ad(%User{} = user, id) when is_binary(id) do
+    mc_ids = Accounts.list_meta_connection_ids_for_user(user)
+
+    case Ad |> scope(mc_ids) |> Repo.get(id) do
+      nil -> {:error, :not_found}
+      ad -> {:ok, ad}
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
   end
 
   @doc "Inserts or updates an ad for `ad_account`, keyed on `(ad_account_id, meta_id)`."

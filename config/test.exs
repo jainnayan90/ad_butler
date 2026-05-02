@@ -56,6 +56,8 @@ config :ad_butler, :messaging_publisher, AdButler.Messaging.PublisherMock
 
 config :ad_butler, :embeddings_service, AdButler.Embeddings.ServiceMock
 
+config :ad_butler, :chat_llm_client, AdButler.Chat.LLMClientMock
+
 config :ad_butler, :broadway_producer, :test
 
 config :ad_butler, Oban, testing: :manual
