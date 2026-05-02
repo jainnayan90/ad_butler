@@ -261,6 +261,344 @@ defmodule AdButler.Analytics do
     )
   end
 
+  @doc """
+  Returns a per-ad delivery + health summary for `ad_ids` over the past
+  `window_days` (default 7). The caller's `User.t()` is required so the
+  function can drop cross-tenant ids — the only ad_ids that surface in the
+  result map are those owned by `user`. Empty input or all-foreign returns
+  `%{}`.
+
+  Designed to eliminate the 5-ad × 4-metric × N+1 pattern in
+  `Chat.Tools.CompareCreatives` — replaces the four per-ad
+  `get_insights_series/3` calls plus the per-ad `unsafe_get_latest_health_score/1`
+  with two bulk queries (one aggregate, one DISTINCT ON). Total query count
+  for a 5-ad invocation drops from ~25 to ≤ 3 (the third being the up-front
+  ownership filter via `Ads.filter_owned_ad_ids/2`).
+
+  Returns a map keyed by `ad_id`:
+
+      %{
+        spend_cents: integer(),
+        impressions: integer(),
+        avg_ctr: float() | nil,
+        avg_cpm_cents: float() | nil,
+        health: AdHealthScore.t() | nil
+      }
+
+  Options:
+    * `:window_days` — integer, default `7`.
+  """
+  @spec get_ads_delivery_summary_bulk(User.t(), [binary()], keyword()) ::
+          %{
+            binary() => %{
+              spend_cents: integer(),
+              impressions: integer(),
+              avg_ctr: float() | nil,
+              avg_cpm_cents: float() | nil,
+              health: AdHealthScore.t() | nil
+            }
+          }
+  def get_ads_delivery_summary_bulk(user, ad_ids, opts \\ [])
+
+  def get_ads_delivery_summary_bulk(%User{}, [], _opts), do: %{}
+
+  def get_ads_delivery_summary_bulk(%User{} = user, ad_ids, opts) when is_list(ad_ids) do
+    window_days = Keyword.get(opts, :window_days, 7)
+    owned = Ads.filter_owned_ad_ids(user, ad_ids)
+
+    if owned == [] do
+      %{}
+    else
+      build_bulk_delivery_summary(owned, window_days)
+    end
+  end
+
+  defp build_bulk_delivery_summary(ad_ids, window_days) do
+    bins = dump_uuids(ad_ids)
+    cutoff = Date.add(Date.utc_today(), -(window_days - 1))
+
+    delivery_rows =
+      Repo.all(
+        from i in "insights_daily",
+          where: i.ad_id in ^bins and i.date_start >= ^cutoff,
+          group_by: i.ad_id,
+          select: %{
+            ad_id: i.ad_id,
+            spend_cents: coalesce(sum(i.spend_cents), 0),
+            impressions: coalesce(sum(i.impressions), 0),
+            avg_ctr: avg(i.ctr_numeric),
+            avg_cpm_cents: avg(i.cpm_cents)
+          }
+      )
+
+    health_rows =
+      Repo.all(
+        from s in AdHealthScore,
+          where: s.ad_id in ^ad_ids,
+          distinct: s.ad_id,
+          order_by: [asc: s.ad_id, desc: s.computed_at]
+      )
+
+    delivery_by_id =
+      delivery_rows
+      |> Enum.flat_map(fn row ->
+        case bin_to_uuid(row.ad_id) do
+          nil -> []
+          ad_id -> [{ad_id, row}]
+        end
+      end)
+      |> Map.new()
+
+    health_by_id = Map.new(health_rows, &{&1.ad_id, &1})
+
+    Map.new(ad_ids, fn ad_id ->
+      delivery = Map.get(delivery_by_id, ad_id, %{})
+      health = Map.get(health_by_id, ad_id)
+
+      {ad_id,
+       %{
+         spend_cents: decimal_to_integer(Map.get(delivery, :spend_cents, 0)),
+         impressions: decimal_to_integer(Map.get(delivery, :impressions, 0)),
+         avg_ctr: decimal_to_float_or_nil(Map.get(delivery, :avg_ctr)),
+         avg_cpm_cents: decimal_to_float_or_nil(Map.get(delivery, :avg_cpm_cents)),
+         health: health
+       }}
+    end)
+  end
+
+  defp bin_to_uuid(bin) when is_binary(bin) and byte_size(bin) == 16 do
+    case Ecto.UUID.load(bin) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp bin_to_uuid(uuid) when is_binary(uuid), do: uuid
+
+  # Defensive catchall — `insights_daily.ad_id` is a binary_id column so the
+  # other heads should match every real row. Reaching this clause means the
+  # column type drifted (schema change) or an upstream cast was bypassed; log
+  # so it surfaces in observability rather than silently dropping the row.
+  defp bin_to_uuid(other) do
+    Logger.warning("analytics: unexpected ad_id shape in bulk delivery rows",
+      kind: kind_of(other)
+    )
+
+    nil
+  end
+
+  defp kind_of(term) when is_struct(term), do: term.__struct__ |> Atom.to_string()
+  defp kind_of(term) when is_map(term), do: "map"
+  defp kind_of(term) when is_atom(term), do: Atom.to_string(term)
+  defp kind_of(term) when is_integer(term), do: "integer"
+  defp kind_of(term) when is_float(term), do: "float"
+  defp kind_of(term) when is_list(term), do: "list"
+  defp kind_of(_), do: "other"
+
+  defp decimal_to_float_or_nil(nil), do: nil
+  defp decimal_to_float_or_nil(%Decimal{} = d), do: d |> Decimal.to_float() |> Float.round(6)
+  defp decimal_to_float_or_nil(n) when is_number(n), do: n / 1
+
+  @doc """
+  Returns a 30-day delivery summary across `ad_ids` (assumed to be all ads
+  in one ad set — caller scopes upstream via `Ads.fetch_ad_set/2` +
+  `Ads.list_ad_ids_in_ad_set/1`).
+
+  Returns `%{spend_cents, impressions, reach_estimate, frequency_estimate,
+  days_with_data}`. Reach is approximated as `impressions / max(frequency, 1)`
+  since `insights_daily.reach_count` is per-day-not-deduped — for a true
+  account reach we'd hit Meta's reach endpoint, out of scope for Week 9.
+  """
+  @spec get_ad_set_delivery_summary([binary()], pos_integer()) :: map()
+  def get_ad_set_delivery_summary(ad_ids, window_days \\ 30)
+      when is_list(ad_ids) and is_integer(window_days) and window_days > 0 do
+    case dump_uuids(ad_ids) do
+      [] -> empty_delivery_summary()
+      bins -> aggregate_delivery(bins, window_days)
+    end
+  end
+
+  defp dump_uuids(ids) do
+    Enum.flat_map(ids, fn id ->
+      case Ecto.UUID.dump(id) do
+        {:ok, bin} -> [bin]
+        :error -> []
+      end
+    end)
+  end
+
+  defp aggregate_delivery(bins, window_days) do
+    cutoff = Date.add(Date.utc_today(), -(window_days - 1))
+
+    Repo.one(
+      from i in "insights_daily",
+        where: i.ad_id in ^bins and i.date_start >= ^cutoff,
+        select: %{
+          spend_cents: coalesce(sum(i.spend_cents), 0),
+          impressions: coalesce(sum(i.impressions), 0),
+          days_with_data: count(fragment("DISTINCT ?", i.date_start)),
+          avg_frequency: avg(i.frequency)
+        }
+    )
+    |> normalise_delivery_summary()
+  end
+
+  defp empty_delivery_summary do
+    %{
+      spend_cents: 0,
+      impressions: 0,
+      reach_estimate: 0,
+      frequency_estimate: 0.0,
+      days_with_data: 0
+    }
+  end
+
+  defp normalise_delivery_summary(nil), do: empty_delivery_summary()
+
+  defp normalise_delivery_summary(row) do
+    # `SUM(bigint)` returns NUMERIC in Postgres → Decimal here; coerce to
+    # integer before arithmetic so reach_estimate division never raises.
+    impressions = decimal_to_integer(row.impressions || 0)
+    spend_cents = decimal_to_integer(row.spend_cents || 0)
+    freq = decimal_to_float(row.avg_frequency)
+    safe_freq = if is_number(freq) and freq > 0, do: freq, else: 1.0
+
+    reach_estimate = trunc(impressions / safe_freq)
+
+    %{
+      spend_cents: spend_cents,
+      impressions: impressions,
+      reach_estimate: reach_estimate,
+      frequency_estimate: Float.round(safe_freq, 4),
+      days_with_data: row.days_with_data || 0
+    }
+  end
+
+  defp decimal_to_integer(%Decimal{} = d), do: Decimal.to_integer(Decimal.round(d, 0, :down))
+  defp decimal_to_integer(n) when is_integer(n), do: n
+  defp decimal_to_integer(n) when is_float(n), do: trunc(n)
+  defp decimal_to_integer(_), do: 0
+
+  @doc """
+  Returns a time series of `metric` values for `ad_id` over `window`.
+
+  Caller is responsible for ensuring `ad_id` is owned by the requesting
+  user (chat tools call `Ads.fetch_ad/2` first). The series is capped at
+  30 points (the natural ceiling of the 30-day window).
+
+  Supported metrics: `:spend, :impressions, :ctr, :cpm, :cpc, :cpa`.
+  Supported windows: `:last_7d, :last_30d`.
+
+  Returns
+  `%{points: [%{date, value}, ...], summary: %{min, max, avg, slope}}`,
+  with `value` units:
+
+    * spend, cpm, cpc, cpa — cents (integer)
+    * impressions — count (integer)
+    * ctr — fractional float (e.g. 0.025 for 2.5%)
+
+  Days with no data contribute a `value: 0` point so the slope/min/max
+  reflect the calendar window, not just observed days.
+  """
+  @spec get_insights_series(binary(), atom(), atom()) :: map()
+  def get_insights_series(ad_id, metric, window)
+      when is_binary(ad_id) and metric in [:spend, :impressions, :ctr, :cpm, :cpc, :cpa] and
+             window in [:last_7d, :last_30d] do
+    days =
+      case window do
+        :last_7d -> 7
+        :last_30d -> 30
+      end
+
+    cutoff = Date.add(Date.utc_today(), -(days - 1))
+
+    rows =
+      Repo.all(
+        from i in "insights_daily",
+          where: i.ad_id == type(^ad_id, :binary_id) and i.date_start >= ^cutoff,
+          order_by: [asc: i.date_start],
+          select: %{
+            date_start: i.date_start,
+            impressions: i.impressions,
+            clicks: i.clicks,
+            spend_cents: i.spend_cents,
+            cpm_cents: i.cpm_cents,
+            cpc_cents: i.cpc_cents,
+            cpa_cents: i.cpa_cents,
+            ctr_numeric: i.ctr_numeric
+          }
+      )
+
+    points = Enum.map(rows, &row_to_point(&1, metric))
+
+    %{
+      ad_id: ad_id,
+      metric: metric,
+      window: window,
+      points: points,
+      summary: summarise_series(points)
+    }
+  end
+
+  defp row_to_point(row, :spend), do: %{date: row.date_start, value: row.spend_cents || 0}
+  defp row_to_point(row, :impressions), do: %{date: row.date_start, value: row.impressions || 0}
+  defp row_to_point(row, :cpm), do: %{date: row.date_start, value: row.cpm_cents || 0}
+  defp row_to_point(row, :cpc), do: %{date: row.date_start, value: row.cpc_cents || 0}
+  defp row_to_point(row, :cpa), do: %{date: row.date_start, value: row.cpa_cents || 0}
+
+  defp row_to_point(row, :ctr) do
+    value = decimal_to_float(row.ctr_numeric)
+    %{date: row.date_start, value: value}
+  end
+
+  defp decimal_to_float(nil), do: 0.0
+  defp decimal_to_float(%Decimal{} = d), do: d |> Decimal.to_float() |> Float.round(6)
+  defp decimal_to_float(n) when is_number(n), do: n / 1
+
+  defp summarise_series([]) do
+    %{min: 0, max: 0, avg: 0.0, slope: 0.0}
+  end
+
+  defp summarise_series(points) do
+    values = Enum.map(points, & &1.value)
+    n = length(values)
+
+    %{
+      min: Enum.min(values),
+      max: Enum.max(values),
+      avg: Float.round(Enum.sum(values) / n, 4),
+      slope: simple_linear_slope(values) |> Float.round(4)
+    }
+  end
+
+  @doc """
+  Returns up to `limit` unresolved findings for `ad_id`, ordered by severity
+  desc then `inserted_at` desc.
+
+  Caller is responsible for ensuring `ad_id` is owned by the requesting
+  user — chat tools call `Ads.fetch_ad/2` first. This function does NOT
+  re-scope; it's a focused-on-one-ad lookup intended for "diagnose this
+  ad" surfaces.
+  """
+  @spec list_open_findings_for_ad(binary(), keyword()) :: [Finding.t()]
+  def list_open_findings_for_ad(ad_id, opts \\ []) when is_binary(ad_id) do
+    limit = Keyword.get(opts, :limit, 10) |> max(1) |> min(50)
+
+    Repo.all(
+      from f in Finding,
+        where: f.ad_id == ^ad_id and is_nil(f.resolved_at),
+        order_by: [
+          desc:
+            fragment(
+              "CASE ? WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END",
+              f.severity
+            ),
+          desc: f.inserted_at
+        ],
+        limit: ^limit
+    )
+  end
+
   # ---------------------------------------------------------------------------
   # Creative fatigue helpers — internal (no scope, called by predictor worker)
   # ---------------------------------------------------------------------------

@@ -21,6 +21,22 @@ defmodule AdButler.Embeddings do
 
   HNSW index (`embedding vector_cosine_ops`, `m=16, ef_construction=64`) is
   the active ANN structure (D0011); cosine distance is the canonical metric.
+
+  ## Load-bearing error reasons
+
+  These atoms are part of this context's public contract — the
+  `EmbeddingsRefreshWorker` (and any future caller) branches on them, and the
+  `LLM.UsageHandler` / Oban snooze logic depends on the exact tag. Renaming or
+  removing one is a breaking change:
+
+    * `:partial_upsert_failure` — `bulk_upsert/1` reported fewer rows affected
+      than supplied (returned by `EmbeddingsRefreshWorker.upsert_batch/3`).
+      Worker treats this as a hard error.
+    * `:vector_count_mismatch` — embeddings service returned a list whose
+      length differs from the input list. Worker treats this as a hard error.
+    * `:rate_limit` — embeddings provider rate-limited the request (or a
+      `ReqLLM.Error.API.Request{status: 429}` came back). Worker snoozes for
+      90s and does NOT consume retry budget (Oban basic engine behavior).
   """
 
   import Ecto.Query

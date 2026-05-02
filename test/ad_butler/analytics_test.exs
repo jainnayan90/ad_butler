@@ -335,4 +335,135 @@ defmodule AdButler.AnalyticsTest do
       assert Analytics.get_unresolved_finding(finding.ad_id, "dead_spend") == nil
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # get_ads_delivery_summary_bulk/3
+  # ---------------------------------------------------------------------------
+
+  describe "get_ads_delivery_summary_bulk/3" do
+    setup do
+      AdButler.Repo.query!("SELECT create_insights_partition((CURRENT_DATE)::DATE)")
+
+      AdButler.Repo.query!(
+        "SELECT create_insights_partition((CURRENT_DATE - INTERVAL '7 days')::DATE)"
+      )
+
+      :ok
+    end
+
+    defp insert_ad_for_user(user) do
+      mc = insert(:meta_connection, user: user)
+      ad_account = insert(:ad_account, meta_connection: mc)
+      campaign = insert(:campaign, ad_account: ad_account)
+      ad_set = insert(:ad_set, ad_account: ad_account, campaign: campaign)
+      insert(:ad, ad_account: ad_account, ad_set: ad_set)
+    end
+
+    test "empty input returns %{}" do
+      user = insert(:user)
+      assert Analytics.get_ads_delivery_summary_bulk(user, []) == %{}
+    end
+
+    test "tenant isolation — user_b's call with user_a's ad_ids returns %{}" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      _ = insert(:meta_connection, user: user_b)
+      ad_a = insert_ad_for_user(user_a)
+
+      assert Analytics.get_ads_delivery_summary_bulk(user_b, [ad_a.id]) == %{}
+    end
+
+    test "mixed ownership — only the user's own ad_id is keyed" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      ad_a = insert_ad_for_user(user_a)
+      ad_b = insert_ad_for_user(user_b)
+
+      result = Analytics.get_ads_delivery_summary_bulk(user_b, [ad_a.id, ad_b.id])
+      assert Map.keys(result) == [ad_b.id]
+    end
+
+    test "happy path — aggregates spend + impressions for the window" do
+      user = insert(:user)
+      ad = insert_ad_for_user(user)
+
+      AdButler.InsightsHelpers.insert_daily(ad, 0, %{spend_cents: 500, impressions: 100})
+      AdButler.InsightsHelpers.insert_daily(ad, 1, %{spend_cents: 700, impressions: 150})
+
+      assert %{} = result = Analytics.get_ads_delivery_summary_bulk(user, [ad.id])
+      assert result[ad.id].spend_cents == 1_200
+      assert result[ad.id].impressions == 250
+      assert result[ad.id].health == nil
+    end
+
+    test "constant-query verification — query count does NOT scale with ad_ids" do
+      # Wraps the call in a query-counting telemetry handler. The bulk fn
+      # must NOT scale linearly with ad_ids — a 5-ad invocation should land
+      # in the same query envelope as a 1-ad invocation. Replaces the prior
+      # 4-metric × 5-ad N+1 (~25 queries) with a fixed 4-query envelope:
+      # mc_ids lookup, ownership filter, delivery aggregate, health DISTINCT ON.
+      user = insert(:user)
+      ads = for _ <- 1..5, do: insert_ad_for_user(user)
+      ad_ids = Enum.map(ads, & &1.id)
+
+      query_count = count_queries(fn -> Analytics.get_ads_delivery_summary_bulk(user, ad_ids) end)
+
+      assert query_count <= 4,
+             "expected ≤ 4 queries for a 5-ad invocation (mc_ids, filter, delivery, health); got #{query_count}"
+
+      # Sanity: a 1-ad invocation produces the same query count. The
+      # mailbox is drained inside count_queries so stale events from the
+      # 5-ad measurement cannot perturb this run.
+      one_ad_count =
+        count_queries(fn -> Analytics.get_ads_delivery_summary_bulk(user, [hd(ad_ids)]) end)
+
+      assert one_ad_count == query_count,
+             "query count must be invariant in N (got #{query_count} for 5 ads, #{one_ad_count} for 1 ad)"
+    end
+
+    # Counts repo queries emitted while `fun` runs. Drains stale telemetry
+    # messages from the mailbox first so prior measurement runs cannot leak
+    # into this one. The handler is uniquely keyed per `make_ref/0` so
+    # parallel `:telemetry.attach` calls do not collide.
+    defp count_queries(fun) when is_function(fun, 0) do
+      ref = make_ref()
+      parent = self()
+      handler_id = "test-bulk-query-count-#{inspect(ref)}"
+
+      drain_query_messages()
+
+      :telemetry.attach(
+        handler_id,
+        [:ad_butler, :repo, :query],
+        fn _event, _measurements, _meta, _config ->
+          send(parent, {:query, ref})
+        end,
+        nil
+      )
+
+      try do
+        _ = fun.()
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      Stream.repeatedly(fn ->
+        receive do
+          {:query, ^ref} -> :ok
+        after
+          0 -> :done
+        end
+      end)
+      |> Enum.take_while(&(&1 == :ok))
+      |> length()
+    end
+
+    defp drain_query_messages do
+      receive do
+        {:query, _} -> drain_query_messages()
+      after
+        0 -> :ok
+      end
+    end
+  end
 end

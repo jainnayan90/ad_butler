@@ -116,6 +116,8 @@ config :logger, :default_formatter,
     :newly_enqueued,
     :skipped,
     :sync_type,
+    :key,
+    :unknown_keys,
     :usage,
     :partition,
     :week_start,
@@ -137,7 +139,11 @@ config :logger, :default_formatter,
     :expected,
     :ads_with_signals,
     :ref_id,
-    :vectors_received
+    :vectors_received,
+    :session_id,
+    :turn_id,
+    :conversation_id,
+    :tool_call_count
   ]
 
 # Use Jason for JSON parsing in Phoenix
@@ -158,7 +164,8 @@ config :phoenix, :filter_parameters, [
   "smtp_username",
   "api_key",
   "openai_api_key",
-  "anthropic_api_key"
+  "anthropic_api_key",
+  "request_id"
 ]
 
 # Import environment specific config. This must remain at the bottom

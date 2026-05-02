@@ -110,7 +110,11 @@ defmodule AdButler.MixProject do
         "phx.digest"
       ],
       "check.unsafe_callers": [
-        "cmd ! grep -rn 'Ads\\.unsafe_' lib/ad_butler_web || (echo 'ERROR: Ads.unsafe_ called from web layer' && exit 1)"
+        "cmd ! grep -rn 'Ads\\.unsafe_' lib/ad_butler_web || (echo 'ERROR: Ads.unsafe_ called from web layer' && exit 1)",
+        "cmd bash scripts/check_chat_unsafe.sh"
+      ],
+      "check.tools_no_repo": [
+        "cmd ! grep -rn 'Repo\\.' lib/ad_butler/chat/tools/ || (echo 'ERROR: Chat tools must call context fns, not Repo directly' && exit 1)"
       ],
       precommit: [
         "compile --warnings-as-errors",
@@ -118,6 +122,7 @@ defmodule AdButler.MixProject do
         "format",
         "hex.audit",
         "check.unsafe_callers",
+        "check.tools_no_repo",
         "test"
       ]
     ]

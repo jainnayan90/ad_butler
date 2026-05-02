@@ -39,4 +39,5 @@ scripts
 WORKFLOW.md
 .envrc
 .env.docker
+.env.local
 structure.sql
