@@ -496,22 +496,22 @@ mix test --include integration
 
 ## Acceptance (Week 9)
 
-- [ ] All 4 chat tables migrated; tenant-isolation tests pass for every
+- [x] All 4 chat tables migrated; tenant-isolation tests pass for every
   `Chat` read function.
-- [ ] `Chat.Server` lazy-starts under `SessionSupervisor`; replays last
+- [x] `Chat.Server` lazy-starts under `SessionSupervisor`; replays last
   20 messages on init; hibernates after 15 min idle.
-- [ ] 5 read tools registered in `Chat.Tools.read_tools/0`; each has a
+- [x] 5 read tools registered in `Chat.Tools.read_tools/0`; each has a
   cross-tenant test (`{:error, :not_found}` on foreign ID), a payload
   size test, and a schema-validation test.
-- [ ] `Chat.Telemetry` attached at boot; a synthetic
+- [x] `Chat.Telemetry` attached at boot; a synthetic
   `[:req_llm, :token_usage]` event triggers an `llm_usage` row.
-- [ ] 6-tool-call cap fires the expected `{:turn_error,
+- [x] 6-tool-call cap fires the expected `{:turn_error,
   :loop_cap_exceeded}` and persists the offending message as `error`.
-- [ ] `priv/prompts/system.md` < 2k tokens (asserted at compile time).
-- [ ] e2e integration test green: scripted LLM tool sequence produces
+- [x] `priv/prompts/system.md` < 2k tokens (asserted at compile time).
+- [x] e2e integration test green: scripted LLM tool sequence produces
   a final assistant message citing a finding id, with no `actions_log`
   rows and exactly one `llm_usage` row.
-- [ ] `mix check.tools_no_repo` clean.
+- [x] `mix check.tools_no_repo` clean.
 
 ---
 

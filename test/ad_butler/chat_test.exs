@@ -422,6 +422,132 @@ defmodule AdButler.ChatTest do
   end
 
   # ---------------------------------------------------------------------------
+  # subscribe/1
+  # ---------------------------------------------------------------------------
+
+  describe "subscribe/1" do
+    test "subscribes the caller to the session topic and receives broadcasts" do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      assert :ok = Chat.subscribe(session.id)
+
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session.id,
+        {:chat_chunk, session.id, "hello"}
+      )
+
+      assert_receive {:chat_chunk, sid, "hello"}, 200
+      assert sid == session.id
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # get_message!/1
+  # ---------------------------------------------------------------------------
+
+  describe "get_message!/1" do
+    test "returns the message for an existing id" do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session.id,
+          role: "user",
+          content: "hi"
+        })
+
+      assert %Message{id: id, content: "hi"} = Chat.get_message!(msg.id)
+      assert id == msg.id
+    end
+
+    test "raises Ecto.NoResultsError on a missing id" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Chat.get_message!("00000000-0000-0000-0000-000000000000")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # update_message_tool_results/2
+  # ---------------------------------------------------------------------------
+
+  describe "get_message/1" do
+    test "returns {:ok, message} for an existing id" do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session.id,
+          role: "user",
+          content: "hi"
+        })
+
+      assert {:ok, %Message{id: id, content: "hi"}} = Chat.get_message(msg.id)
+      assert id == msg.id
+    end
+
+    test "returns :not_found for a missing id" do
+      assert {:error, :not_found} =
+               Chat.get_message("00000000-0000-0000-0000-000000000000")
+    end
+
+    test "returns :not_found for a malformed UUID" do
+      assert {:error, :not_found} = Chat.get_message("not-a-uuid")
+    end
+  end
+
+  describe "unsafe_update_message_tool_results/2" do
+    test "writes the JSONB array and returns the updated message" do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session.id,
+          role: "tool",
+          tool_results: [%{"name" => "get_findings", "ok" => true}]
+        })
+
+      new_results = [
+        %{"name" => "get_insights_series", "ok" => true, "rendered_svg" => "<svg/>"}
+      ]
+
+      assert {:ok, %Message{tool_results: ^new_results}} =
+               Chat.unsafe_update_message_tool_results(msg.id, new_results)
+
+      reloaded = Chat.get_message!(msg.id)
+      assert reloaded.tool_results == new_results
+    end
+
+    test "returns :not_found for a missing id" do
+      assert {:error, :not_found} =
+               Chat.unsafe_update_message_tool_results(
+                 "00000000-0000-0000-0000-000000000000",
+                 []
+               )
+    end
+
+    test "rejects non-list tool_results" do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session.id,
+          role: "user",
+          content: "hi"
+        })
+
+      assert {:error, %Ecto.Changeset{}} =
+               Chat.unsafe_update_message_tool_results(msg.id, %{"not" => "a list"})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Action log
   # ---------------------------------------------------------------------------
 
