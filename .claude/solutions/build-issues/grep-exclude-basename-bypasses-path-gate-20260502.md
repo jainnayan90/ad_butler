@@ -105,6 +105,26 @@ Why this fixes it:
   and reverting. The plan calls this out (P4-T2 in week9-followup-fixes) but
   it's worth doing for every new gate, not just chat-specific ones.
 
+## Known limitation — doc-comment false positives
+
+The current `scripts/check_chat_unsafe.sh` greps every line, including
+`@moduledoc` / `@doc` strings. A cross-reference like `@doc "Used by
+\`Chat.unsafe_foo/1\`"` in a sibling module trips the gate even though no
+call exists. Encountered 2026-05-02 when `lib/ad_butler/chat/message.ex`
+referenced `Chat.unsafe_update_message_tool_results/2` from its
+`tool_results_changeset/2` `@doc`.
+
+Two acceptable workarounds:
+
+1. **Rephrase the doc** to avoid the literal `Chat.unsafe_` substring
+   (e.g. "Used by the parent context's unsafe `tool_results` writer").
+   Loses the ExDoc cross-link but keeps the gate dumb-but-tight.
+2. **Filter comment lines in the script.** Add a `grep -vE '^\s*#|^\s*"""|^\s*@(module)?doc'`
+   stage. Risk: regex maintenance, false negatives if a real call hides
+   in a heredoc. Not worth the complexity for the size of the codebase.
+
+The project picked (1). If the surface grows, revisit (2).
+
 ## Related
 
 - `.claude/solutions/ecto/partial-unique-index-breaks-on-conflict-20260425.md`

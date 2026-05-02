@@ -65,6 +65,31 @@ defmodule AdButler.Chat.Message do
     |> assoc_constraint(:session)
   end
 
+  @doc """
+  Builds a changeset that updates only `tool_results`. Validates that the
+  value is a list — anything else returns a changeset with a
+  `"must be a list"` error on `:tool_results`.
+
+  Used by the parent context's unsafe `tool_results` writer. Future
+  validation on the JSONB shape goes here so every write path picks
+  it up.
+
+  > **Caller contract** — the error-clause changeset is for inspection
+  > via `Ecto.Changeset.traverse_errors/2` (or the project's
+  > `errors_on/1`) only; never pass it to `Repo.update/1`. It carries
+  > no dirty fields and would emit an empty `SET` clause.
+  """
+  @spec tool_results_changeset(t(), term()) :: Ecto.Changeset.t()
+  def tool_results_changeset(%__MODULE__{} = message, tool_results) when is_list(tool_results) do
+    cast(message, %{tool_results: tool_results}, [:tool_results])
+  end
+
+  def tool_results_changeset(%__MODULE__{} = message, _other) do
+    message
+    |> change(%{})
+    |> add_error(:tool_results, "must be a list")
+  end
+
   defp validate_content_required(changeset) do
     role = get_field(changeset, :role)
 

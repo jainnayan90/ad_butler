@@ -114,7 +114,8 @@ defmodule AdButler.MixProject do
         "cmd bash scripts/check_chat_unsafe.sh"
       ],
       "check.tools_no_repo": [
-        "cmd ! grep -rn 'Repo\\.' lib/ad_butler/chat/tools/ || (echo 'ERROR: Chat tools must call context fns, not Repo directly' && exit 1)"
+        "cmd ! grep -rn 'Repo\\.' lib/ad_butler/chat/tools/ || (echo 'ERROR: Chat tools must call context fns, not Repo directly' && exit 1)",
+        "cmd ! grep -rn 'Repo\\.' lib/ad_butler_web/live/chat_live/ || (echo 'ERROR: ChatLive must call Chat context fns, not Repo directly' && exit 1)"
       ],
       precommit: [
         "compile --warnings-as-errors",

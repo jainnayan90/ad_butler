@@ -39,7 +39,7 @@ defmodule AdButler.Chat.Server do
   require Logger
 
   alias AdButler.Chat
-  alias AdButler.Chat.{Message, SystemPrompt, Telemetry, Tools}
+  alias AdButler.Chat.{LogRedactor, Message, SystemPrompt, Telemetry, Tools}
 
   @default_hibernate_after :timer.minutes(15)
   @history_window 20
@@ -150,9 +150,10 @@ defmodule AdButler.Chat.Server do
         {:reply, :ok, %{state | status: :idle, step_count: result.step_count}}
 
       {:error, reason} = err ->
+        # Redact: changeset.changes carries the raw user body — never log it.
         Logger.error("chat: failed to persist user message",
           session_id: state.session_id,
-          reason: reason
+          reason: LogRedactor.redact(reason)
         )
 
         {:reply, err, state}
@@ -229,7 +230,7 @@ defmodule AdButler.Chat.Server do
   defp handle_stream_result({:error, reason}, state, _messages, ctx, _request_id) do
     Logger.error("chat: LLM stream failed",
       session_id: state.session_id,
-      reason: reason
+      reason: LogRedactor.redact(reason)
     )
 
     broadcast(state.session_id, {:turn_error, state.session_id, reason})
@@ -404,9 +405,11 @@ defmodule AdButler.Chat.Server do
         :ok
 
       {:error, reason} ->
+        # Redact: changeset.changes carries the model's content output, which
+        # may echo prompt fragments verbatim.
         Logger.error("chat: failed to persist assistant turn",
           session_id: session_id,
-          reason: reason
+          reason: LogRedactor.redact(reason)
         )
 
         broadcast(session_id, {:turn_error, session_id, :persist_failed})

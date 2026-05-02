@@ -210,6 +210,81 @@ defmodule AdButler.Chat do
   end
 
   @doc """
+  Returns the message with `id` scoped to `user_id`. Raises
+  `Ecto.NoResultsError` on cross-tenant access, a missing row, or a
+  malformed UUID — `Ecto.Query.CastError` is rescued and re-raised as
+  `NoResultsError` to match `get_session!/2`'s contract.
+  """
+  @spec get_message!(binary(), binary()) :: Message.t()
+  def get_message!(user_id, id) when is_binary(user_id) and is_binary(id) do
+    Message
+    |> join(:inner, [m], s in Session, on: s.id == m.chat_session_id)
+    |> where([m, s], m.id == ^id and s.user_id == ^user_id)
+    |> Repo.one!()
+  rescue
+    Ecto.Query.CastError ->
+      reraise Ecto.NoResultsError, [queryable: Message], __STACKTRACE__
+  end
+
+  @doc """
+  Returns `{:ok, message}` for the message with `id` scoped to
+  `user_id`, or `{:error, :not_found}` on miss / cross-tenant access /
+  malformed UUID.
+
+  Joins `chat_sessions` to enforce ownership. Used by `ChatLive.Show`'s
+  `:turn_complete` PubSub handler — defence-in-depth in case the
+  per-session topic is ever leaked to a foreign subscriber.
+  """
+  @spec get_message(binary(), binary()) :: {:ok, Message.t()} | {:error, :not_found}
+  def get_message(user_id, id) when is_binary(user_id) and is_binary(id) do
+    query =
+      from m in Message,
+        join: s in Session,
+        on: s.id == m.chat_session_id,
+        where: m.id == ^id and s.user_id == ^user_id
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      msg -> {:ok, msg}
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
+  end
+
+  @doc """
+  Updates a message's `tool_results` JSONB column.
+
+  **Not tenant-scoped — `unsafe_` prefix is a load-bearing warning.**
+  A caller passing an unvalidated `id` would let it write to another
+  tenant's message. Public callers must first authorize the parent
+  session via `get_session/2`. Currently unused in the streaming path
+  (D-W10-03 was reverted; charts render at display time) but retained
+  for future cache-style use cases.
+
+  Validates that `tool_results` is a list. Returns
+  `{:error, :not_found}` for a missing id and
+  `{:error, changeset}` on a non-list input.
+  """
+  @spec unsafe_update_message_tool_results(binary(), term()) ::
+          {:ok, Message.t()} | {:error, Ecto.Changeset.t() | :not_found}
+  def unsafe_update_message_tool_results(id, tool_results)
+      when is_binary(id) and is_list(tool_results) do
+    case Repo.get(Message, id) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        message
+        |> Message.tool_results_changeset(tool_results)
+        |> Repo.update()
+    end
+  end
+
+  def unsafe_update_message_tool_results(id, tool_results) when is_binary(id) do
+    {:error, Message.tool_results_changeset(%Message{}, tool_results)}
+  end
+
+  @doc """
   Inserts a message and bumps the parent session's `last_activity_at` in
   the same transaction. Returns `{:ok, message}` so callers can pattern
   match on the new row.
@@ -286,6 +361,22 @@ defmodule AdButler.Chat do
     %ActionLog{}
     |> ActionLog.changeset(attrs)
     |> Repo.insert()
+  end
+
+  # ---------------------------------------------------------------------------
+  # PubSub
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Subscribes the calling process to the chat PubSub topic for
+  `session_id`. The `Chat.Server` for the session broadcasts
+  `{:chat_chunk, sid, text}`, `{:tool_result, sid, name, status}`,
+  `{:turn_complete, sid, msg_id}`, and `{:turn_error, sid, reason}`
+  on this topic. Returns `:ok` on success.
+  """
+  @spec subscribe(binary()) :: :ok | {:error, term()}
+  def subscribe(session_id) when is_binary(session_id) do
+    Phoenix.PubSub.subscribe(AdButler.PubSub, "chat:" <> session_id)
   end
 
   # ---------------------------------------------------------------------------

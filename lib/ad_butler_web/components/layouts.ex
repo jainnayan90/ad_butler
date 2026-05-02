@@ -82,6 +82,12 @@ defmodule AdButlerWeb.Layouts do
               label="Findings"
               active={@active_nav == :findings}
             />
+            <.nav_item
+              href={~p"/chat"}
+              icon="hero-chat-bubble-left-right"
+              label="Chat"
+              active={@active_nav == :chat}
+            />
           </nav>
 
           <div class="shrink-0 px-3 py-4 border-t border-gray-200">

@@ -143,7 +143,8 @@ config :logger, :default_formatter,
     :session_id,
     :turn_id,
     :conversation_id,
-    :tool_call_count
+    :tool_call_count,
+    :message_id
   ]
 
 # Use Jason for JSON parsing in Phoenix

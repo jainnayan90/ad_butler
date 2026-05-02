@@ -53,13 +53,13 @@ mix test --include integration    # 7 RabbitMQ pre-existing fails ok
 
 Goal: Logger config + Phoenix param filter ready before any redaction code references them.
 
-- [ ] [P1-T1] Add `:turn_id` and `:conversation_id` to the Logger formatter
+- [x] [P1-T1] Add `:turn_id` and `:conversation_id` to the Logger formatter
   metadata allowlist in [config/config.exs:90-143](config/config.exs#L90).
   Place adjacent to `:session_id` for grep-ability.
-- [ ] [P1-T2] Add `"request_id"` to `:filter_parameters` in
+- [x] [P1-T2] Add `"request_id"` to `:filter_parameters` in
   [config/config.exs:148](config/config.exs#L148). Phoenix param logs
   (controller plug) will redact any inbound/outbound param with that key.
-- [ ] [P1-T3] **Verify**: phase loop. No tests should break — these are
+- [x] [P1-T3] **Verify**: phase loop. No tests should break — these are
   pass-through config additions.
 
 ---
@@ -69,13 +69,13 @@ Goal: Logger config + Phoenix param filter ready before any redaction code refer
 Goal: `request_id` is `redact: true` everywhere and has a partial unique index;
 migration column type is documented as verified.
 
-- [ ] [P2-T1] Add `redact: true` to the `:request_id` field in
+- [x] [P2-T1] Add `redact: true` to the `:request_id` field in
   [lib/ad_butler/chat/message.ex:32](lib/ad_butler/chat/message.ex#L32).
   Confirm `inspect/1` of a `%Message{}` shows `request_id: ...redacted...`
   via `iex> %AdButler.Chat.Message{request_id: "x"} |> inspect()`.
-- [ ] [P2-T2] Add `redact: true` to the `:request_id` field in
+- [x] [P2-T2] Add `redact: true` to the `:request_id` field in
   [lib/ad_butler/llm/usage.ex:38](lib/ad_butler/llm/usage.ex#L38).
-- [ ] [P2-T3] [ecto] Generate a migration
+- [x] [P2-T3] [ecto] Generate a migration
   `priv/repo/migrations/<TS>_add_request_id_unique_index_to_chat_messages.exs`
   that creates a **partial** unique index:
   ```elixir
@@ -93,17 +93,17 @@ migration column type is documented as verified.
   Partial-on-NOT-NULL keeps the user-message rows (no request_id) from
   colliding while still preventing `persist_assistant/3` retries from
   inserting a second row with the same correlation key.
-- [ ] [P2-T4] Run `mix ecto.migrate` locally and confirm `\d chat_messages`
+- [x] [P2-T4] Run `mix ecto.migrate` locally and confirm `\d chat_messages`
   shows the index. Add a one-line test in [chat_test.exs](test/ad_butler/chat_test.exs)
   asserting two assistant messages with the same request_id reject the
   second insert with `Ecto.ConstraintError`.
-- [ ] [P2-T5] **Test W resolved by inspection** (not a code change):
+- [x] [P2-T5] **Test W resolved by inspection** (not a code change):
   `chat_messages.inserted_at` IS already declared `:utc_datetime_usec`
   in the migration ([priv/repo/migrations/20260501110604_create_chat_messages.exs#L18](priv/repo/migrations/20260501110604_create_chat_messages.exs#L18))
   AND in the schema ([message.ex:34](lib/ad_butler/chat/message.ex#L34)).
   `insert_chat_message_at/4` is therefore safe. Document in scratchpad
   D-FU-01 and check off.
-- [ ] [P2-T6] **Verify**: phase loop + the new constraint test.
+- [x] [P2-T6] **Verify**: phase loop + the new constraint test.
 
 ---
 
@@ -113,7 +113,7 @@ Goal: `Chat.Server` cannot crash the calling process via `Jason.encode!`,
 cannot be lazy-started by an unauthorized caller via direct `start_link`,
 and never writes `inspect/1` output into persistent jsonb.
 
-- [ ] [P3-T1] Replace `format_tool_results/1` at
+- [x] [P3-T1] Replace `format_tool_results/1` at
   [server.ex:347-349](lib/ad_butler/chat/server.ex#L347-L349) with a
   non-raising version:
   ```elixir
@@ -130,12 +130,12 @@ and never writes `inspect/1` output into persistent jsonb.
   ```
   Note: the call site in `react_step/7` doesn't carry `session_id` —
   pass it as a second arg instead and log it. (Adjust signature.)
-- [ ] [P3-T2] Mark `Chat.Server.start_link/1` `@doc false` at
+- [x] [P3-T2] Mark `Chat.Server.start_link/1` `@doc false` at
   [server.ex:55-61](lib/ad_butler/chat/server.ex#L55). Update the
   `@moduledoc` reference at [server.ex:53](lib/ad_butler/chat/server.ex#L53)
   to read "end users go through `Chat.ensure_server/2` — `start_link/1`
   is private to the supervisor".
-- [ ] [P3-T3] Replace `serialise_tool_call/1` fallback at
+- [x] [P3-T3] Replace `serialise_tool_call/1` fallback at
   [server.ex:341-344](lib/ad_butler/chat/server.ex#L341-L344):
   ```elixir
   defp serialise_tool_call(other) do
@@ -153,12 +153,12 @@ and never writes `inspect/1` output into persistent jsonb.
   Same `session_id` plumbing note as P3-T1. Decision in scratchpad
   D-FU-02: log without `inspect(other)` to avoid leaking a tool's
   shape into Logger; just classify by kind.
-- [ ] [P3-T4] Add a unit test in
+- [x] [P3-T4] Add a unit test in
   [server_test.exs](test/ad_butler/chat/server_test.exs) for P3-T1:
   pass a tool result containing a value `Jason` cannot encode (e.g.
   `{:ok, %{pid: self()}}`); assert the assistant message is persisted
   with the fallback string instead of crashing the call.
-- [ ] [P3-T5] **Verify**: phase loop + new server tests.
+- [x] [P3-T5] **Verify**: phase loop + new server tests.
 
 ---
 
@@ -167,7 +167,7 @@ and never writes `inspect/1` output into persistent jsonb.
 Goal: `mix check.unsafe_callers` enforces the `Chat.unsafe_*` boundary,
 and `Helpers.decimal_to_float/1` no longer crashes on unexpected input.
 
-- [ ] [P4-T1] Extend the `check.unsafe_callers` alias in
+- [x] [P4-T1] Extend the `check.unsafe_callers` alias in
   [mix.exs](mix.exs) to also forbid `Chat.unsafe_` outside the chat
   Server allowlist:
   ```elixir
@@ -181,11 +181,11 @@ and `Helpers.decimal_to_float/1` no longer crashes on unexpected input.
   only callsite. Decision in scratchpad D-FU-03 — alternative
   considered (move to `AdButler.Chat.Internal`) and rejected as more
   intrusive than the grep gate.
-- [ ] [P4-T2] Run `mix check.unsafe_callers` to confirm it passes
+- [x] [P4-T2] Run `mix check.unsafe_callers` to confirm it passes
   today, then deliberately add a test call site in
   `lib/ad_butler/embeddings.ex` (touch then revert) to confirm it
   fails when violated.
-- [ ] [P4-T3] Add a fall-through clause to
+- [x] [P4-T3] Add a fall-through clause to
   [lib/ad_butler/chat/tools/helpers.ex:48](lib/ad_butler/chat/tools/helpers.ex#L48):
   ```elixir
   def decimal_to_float(_), do: nil
@@ -194,12 +194,12 @@ and `Helpers.decimal_to_float/1` no longer crashes on unexpected input.
   ```elixir
   @spec decimal_to_float(any()) :: nil | float()
   ```
-- [ ] [P4-T4] Add a one-line test in
+- [x] [P4-T4] Add a one-line test in
   [test/ad_butler/chat/tools/](test/ad_butler/chat/tools/) (new file
   or existing) asserting `decimal_to_float("not a number") == nil`.
   Pick the existing test file with the most similar surface — likely
   `get_ad_health_test.exs` since it's the heaviest decimal user.
-- [ ] [P4-T5] **Verify**: phase loop. `mix precommit` should pass.
+- [x] [P4-T5] **Verify**: phase loop. `mix precommit` should pass.
 
 ---
 
@@ -217,27 +217,27 @@ maps 1:1 with the triage queue.)
 
 ## Acceptance
 
-- [ ] All 9 triage items either landed (7) or marked
+- [x] All 9 triage items either landed (7) or marked
   resolved-by-inspection (1: Test W) or already covered (1: Phase 5 inlined).
-- [ ] `mix check.unsafe_callers` rejects a `Chat.unsafe_` call from
+- [x] `mix check.unsafe_callers` rejects a `Chat.unsafe_` call from
   outside the allowlist.
-- [ ] `inspect(%AdButler.Chat.Message{request_id: "x"})` shows
+- [x] `inspect(%AdButler.Chat.Message{request_id: "x"})` shows
   `request_id: ...redacted...`.
-- [ ] `inspect(%AdButler.LLM.Usage{request_id: "x"})` shows
+- [x] `inspect(%AdButler.LLM.Usage{request_id: "x"})` shows
   `request_id: ...redacted...`.
-- [ ] `chat_messages` has a partial unique index on `request_id WHERE
+- [x] `chat_messages` has a partial unique index on `request_id WHERE
   request_id IS NOT NULL`; duplicate-insert test passes.
-- [ ] `format_tool_results` returns a fallback JSON string when
+- [x] `format_tool_results` returns a fallback JSON string when
   `Jason.encode/1` fails — does not raise.
-- [ ] `serialise_tool_call/1` fallback writes `{"error" =>
+- [x] `serialise_tool_call/1` fallback writes `{"error" =>
   "unrecognised_tool_call_shape"}` (no `inspect/1`) to jsonb.
-- [ ] `Chat.Server.start_link/1` is `@doc false`.
-- [ ] Logger formatter allowlist contains `:turn_id` and
+- [x] `Chat.Server.start_link/1` is `@doc false`.
+- [x] Logger formatter allowlist contains `:turn_id` and
   `:conversation_id`.
-- [ ] `:filter_parameters` contains `"request_id"`.
-- [ ] `Helpers.decimal_to_float(_)` returns `nil` instead of raising.
-- [ ] Full test suite green: `mix test` ≥ 524 / 0 / 10 excluded.
-- [ ] `mix precommit` clean.
+- [x] `:filter_parameters` contains `"request_id"`.
+- [x] `Helpers.decimal_to_float(_)` returns `nil` instead of raising.
+- [x] Full test suite green: `mix test` ≥ 524 / 0 / 10 excluded.
+- [x] `mix precommit` clean.
 
 ---
 
