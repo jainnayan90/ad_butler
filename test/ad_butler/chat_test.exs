@@ -441,14 +441,30 @@ defmodule AdButler.ChatTest do
       assert_receive {:chat_chunk, sid, "hello"}, 200
       assert sid == session.id
     end
+
+    test "topic isolation — broadcasting on one session's topic does not reach another's subscriber" do
+      user = insert(:user)
+      {:ok, session_a} = Chat.create_session(%{user_id: user.id})
+      {:ok, session_b} = Chat.create_session(%{user_id: user.id})
+
+      assert :ok = Chat.subscribe(session_a.id)
+
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session_b.id,
+        {:chat_chunk, session_b.id, "for_b_only"}
+      )
+
+      refute_receive {:chat_chunk, _, "for_b_only"}, 100
+    end
   end
 
   # ---------------------------------------------------------------------------
   # get_message!/1
   # ---------------------------------------------------------------------------
 
-  describe "get_message!/1" do
-    test "returns the message for an existing id" do
+  describe "get_message!/2" do
+    test "returns the message for an existing id scoped to the owner" do
       user = insert(:user)
       {:ok, session} = Chat.create_session(%{user_id: user.id})
 
@@ -459,13 +475,32 @@ defmodule AdButler.ChatTest do
           content: "hi"
         })
 
-      assert %Message{id: id, content: "hi"} = Chat.get_message!(msg.id)
+      assert %Message{id: id, content: "hi"} = Chat.get_message!(user.id, msg.id)
       assert id == msg.id
     end
 
-    test "raises Ecto.NoResultsError on a missing id" do
+    test "raises Ecto.NoResultsError on cross-tenant access" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      {:ok, session_a} = Chat.create_session(%{user_id: user_a.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session_a.id,
+          role: "user",
+          content: "secret"
+        })
+
       assert_raise Ecto.NoResultsError, fn ->
-        Chat.get_message!("00000000-0000-0000-0000-000000000000")
+        Chat.get_message!(user_b.id, msg.id)
+      end
+    end
+
+    test "raises Ecto.NoResultsError on a missing id" do
+      user = insert(:user)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Chat.get_message!(user.id, "00000000-0000-0000-0000-000000000000")
       end
     end
   end
@@ -474,8 +509,8 @@ defmodule AdButler.ChatTest do
   # update_message_tool_results/2
   # ---------------------------------------------------------------------------
 
-  describe "get_message/1" do
-    test "returns {:ok, message} for an existing id" do
+  describe "get_message/2" do
+    test "returns {:ok, message} for the owner" do
       user = insert(:user)
       {:ok, session} = Chat.create_session(%{user_id: user.id})
 
@@ -486,17 +521,35 @@ defmodule AdButler.ChatTest do
           content: "hi"
         })
 
-      assert {:ok, %Message{id: id, content: "hi"}} = Chat.get_message(msg.id)
+      assert {:ok, %Message{id: id, content: "hi"}} = Chat.get_message(user.id, msg.id)
       assert id == msg.id
     end
 
+    test "returns :not_found on cross-tenant access" do
+      user_a = insert(:user)
+      user_b = insert(:user)
+      {:ok, session_a} = Chat.create_session(%{user_id: user_a.id})
+
+      {:ok, msg} =
+        Chat.append_message(%{
+          chat_session_id: session_a.id,
+          role: "user",
+          content: "secret"
+        })
+
+      assert {:error, :not_found} = Chat.get_message(user_b.id, msg.id)
+    end
+
     test "returns :not_found for a missing id" do
+      user = insert(:user)
+
       assert {:error, :not_found} =
-               Chat.get_message("00000000-0000-0000-0000-000000000000")
+               Chat.get_message(user.id, "00000000-0000-0000-0000-000000000000")
     end
 
     test "returns :not_found for a malformed UUID" do
-      assert {:error, :not_found} = Chat.get_message("not-a-uuid")
+      user = insert(:user)
+      assert {:error, :not_found} = Chat.get_message(user.id, "not-a-uuid")
     end
   end
 
@@ -519,7 +572,7 @@ defmodule AdButler.ChatTest do
       assert {:ok, %Message{tool_results: ^new_results}} =
                Chat.unsafe_update_message_tool_results(msg.id, new_results)
 
-      reloaded = Chat.get_message!(msg.id)
+      reloaded = Chat.get_message!(user.id, msg.id)
       assert reloaded.tool_results == new_results
     end
 

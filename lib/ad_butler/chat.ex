@@ -210,26 +210,35 @@ defmodule AdButler.Chat do
   end
 
   @doc """
-  Returns the message with `id`, raising `Ecto.NoResultsError` if no row
-  exists. **Not tenant-scoped** — public callers should prefer
-  `get_message/1` and authorize the parent session upstream.
+  Returns the message with `id` scoped to `user_id`. Raises
+  `Ecto.NoResultsError` on cross-tenant access or a missing row.
   """
-  @spec get_message!(binary()) :: Message.t()
-  def get_message!(id) when is_binary(id) do
-    Repo.get!(Message, id)
+  @spec get_message!(binary(), binary()) :: Message.t()
+  def get_message!(user_id, id) when is_binary(user_id) and is_binary(id) do
+    Message
+    |> join(:inner, [m], s in Session, on: s.id == m.chat_session_id)
+    |> where([m, s], m.id == ^id and s.user_id == ^user_id)
+    |> Repo.one!()
   end
 
   @doc """
-  Returns `{:ok, message}` for the message with `id`, or
-  `{:error, :not_found}` on miss / malformed UUID. **Not
-  tenant-scoped** — caller must authorize the parent session first.
-  Used by `ChatLive.Show`'s `:turn_complete` PubSub handler where the
-  parent session was already authorized via `get_session/2` and the
-  msg_id arrives from the trusted per-session topic.
+  Returns `{:ok, message}` for the message with `id` scoped to
+  `user_id`, or `{:error, :not_found}` on miss / cross-tenant access /
+  malformed UUID.
+
+  Joins `chat_sessions` to enforce ownership. Used by `ChatLive.Show`'s
+  `:turn_complete` PubSub handler — defence-in-depth in case the
+  per-session topic is ever leaked to a foreign subscriber.
   """
-  @spec get_message(binary()) :: {:ok, Message.t()} | {:error, :not_found}
-  def get_message(id) when is_binary(id) do
-    case Repo.get(Message, id) do
+  @spec get_message(binary(), binary()) :: {:ok, Message.t()} | {:error, :not_found}
+  def get_message(user_id, id) when is_binary(user_id) and is_binary(id) do
+    query =
+      from m in Message,
+        join: s in Session,
+        on: s.id == m.chat_session_id,
+        where: m.id == ^id and s.user_id == ^user_id
+
+    case Repo.one(query) do
       nil -> {:error, :not_found}
       msg -> {:ok, msg}
     end
@@ -251,7 +260,7 @@ defmodule AdButler.Chat do
   `{:error, :not_found}` for a missing id and
   `{:error, changeset}` on a non-list input.
   """
-  @spec unsafe_update_message_tool_results(binary(), [map()]) ::
+  @spec unsafe_update_message_tool_results(binary(), term()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def unsafe_update_message_tool_results(id, tool_results)
       when is_binary(id) and is_list(tool_results) do
@@ -261,18 +270,13 @@ defmodule AdButler.Chat do
 
       message ->
         message
-        |> Ecto.Changeset.cast(%{tool_results: tool_results}, [:tool_results])
+        |> Message.tool_results_changeset(tool_results)
         |> Repo.update()
     end
   end
 
-  def unsafe_update_message_tool_results(id, _tool_results) when is_binary(id) do
-    changeset =
-      %Message{}
-      |> Ecto.Changeset.change(%{})
-      |> Ecto.Changeset.add_error(:tool_results, "must be a list")
-
-    {:error, changeset}
+  def unsafe_update_message_tool_results(id, tool_results) when is_binary(id) do
+    {:error, Message.tool_results_changeset(%Message{}, tool_results)}
   end
 
   @doc """

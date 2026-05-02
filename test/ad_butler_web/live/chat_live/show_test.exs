@@ -5,6 +5,7 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
   import Phoenix.LiveViewTest
 
   alias AdButler.Chat
+  alias AdButler.Repo
 
   describe "ChatLive.Show — auth and disconnected render" do
     test "tenant isolation — user B is redirected away from user A's session", %{conn: conn} do
@@ -44,6 +45,16 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
       assert html =~ "first message"
       assert html =~ "second message"
       assert html =~ "Demo"
+    end
+
+    test "empty session renders the 'Start the conversation' placeholder", %{conn: conn} do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{session.id}")
+
+      assert render(view) =~ "Start the conversation"
     end
   end
 
@@ -138,6 +149,63 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
       assert render(view) =~ "Lost a message"
     end
 
+    test "{:tool_result, _, name, _status} surfaces 'Calling …' indicator", %{conn: conn} do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{session.id}")
+      _ = render(view)
+
+      # The `Calling …` label lives inside the streaming bubble, which only
+      # renders while `@streaming_chunk` is set — prime it first.
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session.id,
+        {:chat_chunk, session.id, "thinking…"}
+      )
+
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session.id,
+        {:tool_result, session.id, "get_findings", :ok}
+      )
+
+      # Re-render before the 2-second `clear_tool_indicator` fires.
+      assert render(view) =~ "Calling get_findings"
+    end
+
+    test "{:turn_complete, _, :error} clears streaming chunk without flashing", %{conn: conn} do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{session.id}")
+      _ = render(view)
+
+      # Prime a streaming chunk.
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session.id,
+        {:chat_chunk, session.id, "partial reply"}
+      )
+
+      assert render(view) =~ "partial reply"
+
+      # Cap-hit terminal — clears the chunk, no flash, view stays alive.
+      Phoenix.PubSub.broadcast(
+        AdButler.PubSub,
+        "chat:" <> session.id,
+        {:turn_complete, session.id, :error}
+      )
+
+      html = render(view)
+      refute html =~ "partial reply"
+      refute html =~ "Agent error"
+      refute html =~ "Lost a message"
+      assert Process.alive?(view.pid)
+    end
+
     test "{:turn_error, _, reason} flashes and clears streaming state", %{conn: conn} do
       user = insert(:user)
       {:ok, session} = Chat.create_session(%{user_id: user.id})
@@ -153,6 +221,33 @@ defmodule AdButlerWeb.ChatLive.ShowTest do
       )
 
       assert render(view) =~ "Agent error"
+    end
+  end
+
+  describe "ChatLive.Show — handle_async error branches" do
+    test "handle_async {:ok, {:error, _}} flashes 'Send failed' and resets :sending",
+         %{conn: conn} do
+      user = insert(:user)
+      {:ok, session} = Chat.create_session(%{user_id: user.id})
+
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{session.id}")
+      _ = render(view)
+
+      # Drive `Chat.send_message` into the `{:error, :not_found}` branch by
+      # deleting the session row after mount. `ensure_server/2` re-checks
+      # ownership via `get_session/2` on every send, so the next submit
+      # returns `{:error, :not_found}` — which `start_async` surfaces as
+      # `{:ok, {:error, :not_found}}` to `handle_async/3`.
+      Repo.delete!(session)
+
+      _ = view |> form("form", %{"body" => "hello"}) |> render_submit()
+
+      # render_async waits for the start_async to resolve before re-rendering.
+      html = render_async(view, 500)
+
+      assert html =~ "Send failed"
+      refute html =~ "Sending…"
     end
   end
 

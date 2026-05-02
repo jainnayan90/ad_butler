@@ -146,22 +146,20 @@ defmodule AdButlerWeb.ChatLive.Components do
   defp tool_results_block(assigns) do
     ~H"""
     <div class="mt-2 space-y-1">
-      <%= for entry <- @results do %>
-        <%= case chart_points(entry) do %>
-          <% nil -> %>
-            <.tool_call
-              name={tool_name(entry)}
-              args={Map.get(entry, "args")}
-              result={Map.get(entry, "result")}
-            />
-          <% points -> %>
-            <.chart_block
-              points={points}
-              title={chart_title(entry)}
-              metric={chart_metric(entry)}
-            />
-        <% end %>
-      <% end %>
+      <div :for={entry <- @results}>
+        <.chart_block
+          :if={chart_points(entry)}
+          points={chart_points(entry)}
+          title={chart_title(entry)}
+          metric={chart_metric(entry)}
+        />
+        <.tool_call
+          :if={is_nil(chart_points(entry))}
+          name={tool_name(entry)}
+          args={Map.get(entry, "args")}
+          result={Map.get(entry, "result")}
+        />
+      </div>
     </div>
     """
   end

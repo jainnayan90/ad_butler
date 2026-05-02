@@ -19,6 +19,7 @@ defmodule AdButlerWeb.ChatLive.Show do
   require Logger
 
   alias AdButler.Chat
+  alias AdButler.Chat.LogRedactor
   alias AdButlerWeb.ChatLive.Components
 
   @per_page 50
@@ -35,7 +36,10 @@ defmodule AdButlerWeb.ChatLive.Show do
       |> assign(:current_tool, nil)
       |> assign(:page, 1)
       |> assign(:total_pages, 1)
-      |> assign(:message_count, 0)
+      # `:any_messages?` flips to `true` when at least one message has been
+      # rendered (history load or `:turn_complete`). The single LV process
+      # serialises `:load` and `:turn_complete` so no race in practice.
+      |> assign(:any_messages?, false)
       |> stream(:messages, [])
 
     if connected?(socket), do: send(self(), {:load, id})
@@ -71,7 +75,7 @@ defmodule AdButlerWeb.ChatLive.Show do
           socket
           |> assign(:session, session)
           |> assign(:total_pages, total_pages)
-          |> assign(:message_count, total)
+          |> assign(:any_messages?, total > 0)
           |> stream(:messages, messages, reset: true)
 
         {:noreply, socket}
@@ -84,7 +88,6 @@ defmodule AdButlerWeb.ChatLive.Show do
     end
   end
 
-  @impl true
   def handle_info({:chat_chunk, _sid, text}, socket) do
     current = socket.assigns.streaming_chunk || ""
     {:noreply, assign(socket, :streaming_chunk, current <> text)}
@@ -108,14 +111,14 @@ defmodule AdButlerWeb.ChatLive.Show do
   end
 
   def handle_info({:turn_complete, _sid, msg_id}, socket) do
-    case Chat.get_message(msg_id) do
+    case Chat.get_message(socket.assigns.current_user.id, msg_id) do
       {:ok, msg} ->
         socket =
           socket
           |> stream_insert(:messages, msg)
           |> assign(:streaming_chunk, nil)
           |> assign(:current_tool, nil)
-          |> assign(:message_count, socket.assigns.message_count + 1)
+          |> assign(:any_messages?, true)
 
         {:noreply, socket}
 
@@ -135,7 +138,7 @@ defmodule AdButlerWeb.ChatLive.Show do
   def handle_info({:turn_error, _sid, reason}, socket) do
     Logger.warning("chat: turn error",
       session_id: socket.assigns.session_id,
-      reason: redact_reason(reason)
+      reason: LogRedactor.redact(reason)
     )
 
     {:noreply,
@@ -161,7 +164,7 @@ defmodule AdButlerWeb.ChatLive.Show do
           |> assign(:sending, true)
           |> assign(:streaming_chunk, "")
           |> start_async(:send_turn, fn ->
-            send_turn_safely(user_id, session_id, trimmed)
+            Chat.send_message(user_id, session_id, trimmed)
           end)
 
         {:noreply, socket}
@@ -190,7 +193,7 @@ defmodule AdButlerWeb.ChatLive.Show do
   def handle_async(:send_turn, {:ok, {:error, reason}}, socket) do
     Logger.warning("chat: send failed",
       session_id: socket.assigns.session_id,
-      reason: redact_reason(reason)
+      reason: LogRedactor.redact(reason)
     )
 
     {:noreply,
@@ -203,7 +206,7 @@ defmodule AdButlerWeb.ChatLive.Show do
   def handle_async(:send_turn, {:exit, reason}, socket) do
     Logger.error("chat: send_turn exited",
       session_id: socket.assigns.session_id,
-      reason: redact_reason(reason)
+      reason: LogRedactor.redact(reason)
     )
 
     {:noreply,
@@ -254,7 +257,7 @@ defmodule AdButlerWeb.ChatLive.Show do
             </button>
           </div>
 
-          <div :if={@message_count == 0 and is_nil(@streaming_chunk)} class="text-center py-12">
+          <div :if={!@any_messages? and is_nil(@streaming_chunk)} class="text-center py-12">
             <p class="text-gray-500 text-sm">
               Start the conversation. Try asking "What findings do I have today?"
             </p>
@@ -300,20 +303,6 @@ defmodule AdButlerWeb.ChatLive.Show do
   # --------------------------------------------------------------------------
   # Internal
   # --------------------------------------------------------------------------
-
-  defp send_turn_safely(user_id, session_id, body) do
-    Chat.send_message(user_id, session_id, body)
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  # Reduce a free-form reason term to a safe atom/binary tag.
-  # `start_async` exit reasons and LLM provider error bodies can echo
-  # the user's chat content; never log them verbatim.
-  defp redact_reason(reason) when is_atom(reason), do: reason
-  defp redact_reason({tag, _}) when is_atom(tag), do: tag
-  defp redact_reason({tag, _, _}) when is_atom(tag), do: tag
-  defp redact_reason(_), do: :unknown
 
   defp load_messages_page(socket, page) do
     session = socket.assigns.session
